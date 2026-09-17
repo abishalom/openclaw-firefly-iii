@@ -1,0 +1,16 @@
+node_modules/
+dist/
+coverage/
+*.log
+*.tgz
+.env
+.env.*
+!.env.example
+.DS_Store
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.json
+openclaw.local.json
+.pi/

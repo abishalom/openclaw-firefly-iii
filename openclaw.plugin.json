@@ -1,0 +1,91 @@
+{
+  "id": "openclaw-firefly",
+  "name": "Firefly III",
+  "description": "Safely inspect Firefly III and manage inactive, OpenClaw-owned category rule proposals.",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "required": [
+      "baseUrl",
+      "accessToken"
+    ],
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Operator-configured Firefly III URL. /api/v1 is appended when absent."
+      },
+      "accessToken": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Firefly bearer token. Prefer an OpenClaw SecretRef; it is resolved before plugin startup."
+      },
+      "headers": {
+        "type": "object",
+        "patternProperties": {
+          "^.*$": {
+            "type": "string"
+          }
+        },
+        "description": "Operator-controlled custom headers. Values may be OpenClaw SecretRefs."
+      },
+      "requestTimeoutMs": {
+        "type": "integer",
+        "minimum": 100,
+        "maximum": 120000,
+        "default": 10000
+      },
+      "maxResponseBytes": {
+        "type": "integer",
+        "minimum": 1024,
+        "maximum": 10485760,
+        "default": 5242880,
+        "description": "Maximum Firefly response body size in bytes. Responses exceeding this limit are cancelled."
+      },
+      "allowInsecureHttp": {
+        "type": "boolean",
+        "default": false,
+        "description": "Permit plain HTTP for trusted local/test deployments. HTTPS is required by default."
+      },
+      "allowBestEffortPendingRuleDeletion": {
+        "type": "boolean",
+        "default": false,
+        "description": "Allow pending-rule deletion despite Firefly lacking conditional DELETE. Enable only when no external writers can modify rules."
+      }
+    },
+    "additionalProperties": false
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [
+        {
+          "path": "accessToken",
+          "expected": "string"
+        },
+        {
+          "path": "headers.*",
+          "expected": "string"
+        }
+      ]
+    }
+  },
+  "contracts": {
+    "tools": [
+      "firefly_transactions_list",
+      "firefly_transaction_get",
+      "firefly_transactions_search",
+      "firefly_categories_list",
+      "firefly_rules_list",
+      "firefly_rule_get",
+      "firefly_rule_groups_list",
+      "firefly_rule_create_pending",
+      "firefly_rule_test",
+      "firefly_rule_update_pending",
+      "firefly_rule_confirm_pending",
+      "firefly_rule_reject_pending"
+    ]
+  }
+}

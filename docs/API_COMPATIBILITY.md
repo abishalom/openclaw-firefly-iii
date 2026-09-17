@@ -1,0 +1,76 @@
+# Firefly III API compatibility
+
+## Verification target
+
+Verified before implementation against:
+
+- Firefly III tag `v6.7.2` (tag commit `e36b2ab28e838a47b6073288eb3273c67abf3380`; annotated tag object advertised as `10cceef11e89cc5445af920425deb4ce1db96ffe`).
+- `firefly-iii/api-docs` versioned file `dist/firefly-iii-v6.7.2-v1.yaml` at repository commit `738ee5df30d9dd6e6bff5098f92d7b8c6fb02325` (SHA-256 `c888f791ac569e26265b9cc69ae5e640b22b5bc8df0f53330c90c36d53ae6534`).
+- Relevant v6.7.2 source request validators, transformers, route definitions, and rule actions.
+
+Upstream references:
+
+- <https://github.com/firefly-iii/firefly-iii/tree/v6.7.2>
+- <https://github.com/firefly-iii/api-docs/blob/main/dist/firefly-iii-v6.7.2-v1.yaml>
+
+## Confirmed contracts
+
+### Media types and envelopes
+
+Read/create/update responses use `application/vnd.api+json` JSON:API-style envelopes:
+
+- single: `{ data: { type, id, attributes, links? } }`
+- collection: `{ data: [...], meta: { pagination }, links? }`
+
+Requests use `application/json`. The client accepts both `application/vnd.api+json` and `application/json` responses.
+
+### Read endpoints
+
+| Operation | Endpoint | Confirmed parameters |
+|---|---|---|
+| list transactions | `GET /v1/transactions` | `page`, `limit`, `start`, `end`, `type` |
+| get transaction | `GET /v1/transactions/{id}` | numeric/string path ID |
+| search transactions | `GET /v1/search/transactions` | required `query`, `page`, `limit` |
+| list categories | `GET /v1/categories` | `page`, `limit`, optional enrichment range |
+| list rules | `GET /v1/rules` | `page`, `limit` |
+| get rule | `GET /v1/rules/{id}` | ID |
+| list rule groups | `GET /v1/rule-groups` | `page`, `limit` |
+| test rule | `GET /v1/rules/{id}/test` | `start`, `end`, repeated `accounts[]` |
+
+The test endpoint returns `TransactionArray`. v6.7.2 source internally uses a very large fixed paginator and its OpenAPI does not advertise a `limit`; the plugin therefore does not send a fictional server-side limit. `maxResults` only bounds normalized tool output.
+
+### `RuleStore`
+
+Confirmed required fields: `title`, `rule_group_id` (or source-supported title alternative), `trigger`, `triggers`, and `actions`. Relevant fields are `description`, `order`, `active`, `strict`, and `stop_processing`. The plugin always supplies `rule_group_id`, forces `active: false`, and supplies active trigger/action entries.
+
+### `RuleUpdate`
+
+All fields are optional and partial updates are supported. The plugin sends complete snake_case snapshots (including top-level `order`/`stop_processing` and active trigger/action entries) for pending updates and confirmation's inactive verification write. After verifying that response against the reviewed digest, the final activation is a minimal partial update containing only `active` and the confirmed description marker.
+
+### Rule enums
+
+Top-level rule moments are:
+
+- `store-journal`
+- `update-journal`
+- `manual-activation`
+
+The plugin's trigger allowlist is copied from the v6.7.2 OpenAPI `RuleTriggerKeyword` enum. The v6.7.2 source validator derives a larger set from `config/search.php`; the published enum is incomplete. To avoid silently depending on undocumented values, this plugin exposes only the published subset.
+
+The v6.7.2 source action configuration contains more keywords than the OpenAPI enum (for example account switching and amount changes). None are relevant here: plugin code accepts only exact keyword `set_category`.
+
+### Ownership metadata
+
+`RuleStore` and `RuleUpdate` have no extension/metadata property. The supported `description` field (max 32768 in source validation) is used for the ownership/pending marker and SHA-256 semantic proposal digest. v6.7.2's `Rule` model HTML-escapes descriptions, trims titles, canonicalizes context-free trigger values, and clamps rule order. The plugin derives the digest from each normalized response and re-signs with a description-only inactive PUT when needed. IDs are canonical positive decimal strings (zero and leading zeroes are refused). v6.7.2 provides no ETag/version precondition or conditional DELETE; the plugin's in-process mutex and GET/verify/re-PUT sequence are therefore best-effort against external writers, not an atomic cross-client guarantee. Pending deletion is opt-in and requires no external writers.
+
+## Compatibility policy
+
+Firefly upgrades require rerunning the lifecycle integration tests and reviewing:
+
+1. `RuleStore` / `RuleUpdate` validators and schemas;
+2. trigger and action keyword lists;
+3. transaction/rule transformers;
+4. `/rules/{id}/test` behavior;
+5. response media types and envelopes.
+
+New action keywords are denied until explicitly reviewed.
