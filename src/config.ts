@@ -4,18 +4,33 @@ import { FireflyError } from "./errors.js";
 export const DEFAULT_MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 export const MAX_RESPONSE_BYTES_LIMIT = 10 * 1024 * 1024;
 
+const secretRefSchema = Type.Object(
+  {
+    source: Type.Union([
+      Type.Literal("env"),
+      Type.Literal("file"),
+      Type.Literal("exec"),
+      Type.Literal("store"),
+    ]),
+    provider: Type.String({ minLength: 1 }),
+    id: Type.String({ minLength: 1 }),
+  },
+  { additionalProperties: false },
+);
+
+const secretStringSchema = Type.Union([Type.String({ minLength: 1 }), secretRefSchema]);
+
 export const fireflyConfigSchema = Type.Object(
   {
     baseUrl: Type.String({
       minLength: 1,
       description: "Operator-configured Firefly III URL. /api/v1 is appended when absent.",
     }),
-    accessToken: Type.String({
-      minLength: 1,
+    accessToken: Type.Union([Type.String({ minLength: 1 }), secretRefSchema], {
       description: "Firefly bearer token. Prefer an OpenClaw SecretRef; it is resolved before plugin startup.",
     }),
     headers: Type.Optional(
-      Type.Record(Type.String({ minLength: 1 }), Type.String(), {
+      Type.Record(Type.String({ minLength: 1 }), secretStringSchema, {
         description: "Operator-controlled custom headers. Values may be OpenClaw SecretRefs.",
       }),
     ),

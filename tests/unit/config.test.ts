@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { buildApiBaseUrl, normalizeConfig } from "../../src/config.js";
+import { buildApiBaseUrl, fireflyConfigSchema, normalizeConfig } from "../../src/config.js";
 import { FireflyError } from "../../src/errors.js";
+import { Value } from "typebox/value";
 
 describe("Firefly config", () => {
   it.each([
@@ -46,5 +47,17 @@ describe("Firefly config", () => {
       expect(error).toBeInstanceOf(FireflyError);
       expect(String(error)).not.toContain("FIREFLY_SECRET");
     }
+  });
+
+  it("accepts SecretRefs in source config for declared secret inputs", () => {
+    const ref = { source: "store", provider: "default", id: "FIREFLY_ACCESS_TOKEN" };
+    expect(Value.Check(fireflyConfigSchema, { baseUrl: "https://firefly.test", accessToken: ref })).toBe(true);
+    expect(
+      Value.Check(fireflyConfigSchema, {
+        baseUrl: "https://firefly.test",
+        accessToken: ref,
+        headers: { "X-Access-Token": ref },
+      }),
+    ).toBe(true);
   });
 });

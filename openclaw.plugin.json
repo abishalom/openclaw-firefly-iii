@@ -2,7 +2,7 @@
   "id": "openclaw-firefly",
   "name": "Firefly III",
   "description": "Safely inspect Firefly III and manage inactive, OpenClaw-owned rule proposals.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "configSchema": {
     "type": "object",
     "required": [
@@ -16,15 +16,78 @@
         "description": "Operator-configured Firefly III URL. /api/v1 is appended when absent."
       },
       "accessToken": {
-        "type": "string",
-        "minLength": 1,
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "object",
+            "required": [
+              "source",
+              "provider",
+              "id"
+            ],
+            "properties": {
+              "source": {
+                "anyOf": [
+                  { "const": "env", "type": "string" },
+                  { "const": "file", "type": "string" },
+                  { "const": "exec", "type": "string" },
+                  { "const": "store", "type": "string" }
+                ]
+              },
+              "provider": {
+                "type": "string",
+                "minLength": 1
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        ],
         "description": "Firefly bearer token. Prefer an OpenClaw SecretRef; it is resolved before plugin startup."
       },
       "headers": {
         "type": "object",
         "patternProperties": {
           "^.*$": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "object",
+                "required": [
+                  "source",
+                  "provider",
+                  "id"
+                ],
+                "properties": {
+                  "source": {
+                    "anyOf": [
+                      { "const": "env", "type": "string" },
+                      { "const": "file", "type": "string" },
+                      { "const": "exec", "type": "string" },
+                      { "const": "store", "type": "string" }
+                    ]
+                  },
+                  "provider": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
           }
         },
         "description": "Operator-controlled custom headers. Values may be OpenClaw SecretRefs."
