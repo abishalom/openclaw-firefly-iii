@@ -2,7 +2,7 @@
   "id": "openclaw-firefly",
   "name": "Firefly III",
   "description": "Safely inspect Firefly III and manage inactive, OpenClaw-owned category rule proposals.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "configSchema": {
     "type": "object",
     "required": [

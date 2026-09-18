@@ -27,7 +27,7 @@ let nextId: number;
 let confirmPayload: Record<string, unknown> | undefined;
 let corruptActivation: boolean;
 let failResignPut: boolean;
-let requests: Array<{ method: string; path: string }>;
+let requests: Array<{ method: string; path: string; search: string }>;
 
 beforeEach(async () => {
   rules = new Map();
@@ -74,6 +74,13 @@ describe("pending rule lifecycle", () => {
 
     const firstTest = await service.testRule({ id: created.id, maxResults: 50 });
     expect(firstTest.transactions).toHaveLength(2);
+    expect(firstTest).toMatchObject({
+      ruleId: created.id,
+      strict: true,
+      queries: ['description_contains:"SUPER 99"'],
+      previewEngine: "firefly-search",
+      truncated: false,
+    });
 
     const updated = await service.updatePendingRule({
       id: created.id,
@@ -86,6 +93,10 @@ describe("pending rule lifecycle", () => {
 
     const secondTest = await service.testRule({ id: created.id, start: "2026-01-01", end: "2026-12-31" });
     expect(secondTest.transactions).toHaveLength(1);
+    expect(secondTest.queries).toEqual([
+      'description_is:"SUPER 99" date_after:"2026-01-01" date_before:"2026-12-31"',
+    ]);
+    expect(requests.some((request) => request.path.endsWith("/test"))).toBe(false);
 
     const beforeConfirm = structuredClone(rules.get(created.id));
     const confirmed = await service.confirmPendingRule(created.id, updated.proposalDigest!);
@@ -111,6 +122,34 @@ describe("pending rule lifecycle", () => {
     const confirmed = await service.confirmPendingRule(created.id, created.proposalDigest!);
     expect(confirmed.description).toContain("A & <B> \"quote\" 'apostrophe'");
     expect(confirmed.description).not.toContain("&amp;");
+  });
+
+  it("unions non-strict preview searches in rule order and honors stop-processing", async () => {
+    rules.set("900", {
+      id: "900",
+      title: "Non-strict preview",
+      description: "Ordinary Firefly rule",
+      rule_group_id: "7",
+      rule_group_title: "Default",
+      trigger: "store-journal",
+      order: 1,
+      active: false,
+      strict: false,
+      stop_processing: false,
+      triggers: [
+        { type: "description_is", value: "SUPER 99", active: true, stop_processing: false, order: 1 },
+        { type: "description_contains", value: "SUPER 99", active: true, stop_processing: false, order: 2 },
+      ],
+      actions: [{ type: "set_category", value: "Groceries", active: true }],
+    });
+    const union = await service.testRule({ id: "900" });
+    expect(union).toMatchObject({ strict: false, executedQueries: 2, truncated: false });
+    expect(union.transactions.map((transaction) => transaction.id)).toEqual(["501", "502"]);
+
+    rules.get("900")!.triggers[0]!.stop_processing = true;
+    const stopped = await service.testRule({ id: "900" });
+    expect(stopped).toMatchObject({ strict: false, executedQueries: 1, truncated: false });
+    expect(stopped.transactions.map((transaction) => transaction.id)).toEqual(["501"]);
   });
 
   it("rolls a semantically mismatched activation back to the reviewed inactive proposal", async () => {
@@ -224,13 +263,25 @@ describe("pending rule lifecycle", () => {
 
 async function route(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const url = new URL(request.url ?? "/", "http://test");
-  requests.push({ method: request.method ?? "GET", path: url.pathname });
+  requests.push({ method: request.method ?? "GET", path: url.pathname, search: url.search });
   if (request.headers.authorization !== "Bearer integration-token" || request.headers["x-proxy-token"] !== "required-proxy-token") {
     return json(response, 403, { message: "denied" });
   }
 
   if (request.method === "GET" && url.pathname === "/api/v1/categories") {
     return collection(response, [resource("categories", "1", { name: "Groceries", notes: null })]);
+  }
+  if (request.method === "GET" && url.pathname === "/api/v1/search/transactions") {
+    const query = url.searchParams.get("query") ?? "";
+    const candidates = [
+      transaction("501", "SUPER 99", "121.15"),
+      transaction("502", "SUPER 99 EXPRESS", "38.54"),
+    ];
+    if (query.includes('description_is:"SUPER 99"')) {
+      return collection(response, candidates.filter((item) => item.attributes.transactions[0]?.description === "SUPER 99"));
+    }
+    if (query.includes('description_contains:"SUPER 99"')) return collection(response, candidates);
+    return collection(response, []);
   }
   if (request.method === "POST" && url.pathname === "/api/v1/rules") {
     const body = await readBody(request);
@@ -240,27 +291,15 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     return json(response, 200, singleRule(state));
   }
 
-  const match = /^\/api\/v1\/rules\/(\d+)(\/test)?$/u.exec(url.pathname);
+  const match = /^\/api\/v1\/rules\/(\d+)$/u.exec(url.pathname);
   if (match?.[1]) {
     const id = match[1];
     const state = rules.get(id);
     if (!state) return json(response, 404, { message: "missing" });
-    if (request.method === "GET" && match[2] === "/test") {
-      const trigger = state.triggers[0] ?? {};
-      const candidates = [
-        transaction("501", "SUPER 99", "121.15"),
-        transaction("502", "SUPER 99 EXPRESS", "38.54"),
-      ];
-      const value = String(trigger.value ?? "");
-      const matched = trigger.type === "description_is"
-        ? candidates.filter((item) => item.attributes.transactions[0]?.description === value)
-        : candidates.filter((item) => item.attributes.transactions[0]?.description.includes(value));
-      return collection(response, matched);
-    }
-    if (request.method === "GET" && match[2] === undefined) {
+    if (request.method === "GET") {
       return json(response, 200, singleRule(state));
     }
-    if (request.method === "PUT" && match[2] === undefined) {
+    if (request.method === "PUT") {
       const body = await readBody(request);
       if (
         failResignPut &&
@@ -280,7 +319,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       rules.set(id, updated);
       return json(response, 200, singleRule(updated));
     }
-    if (request.method === "DELETE" && match[2] === undefined) {
+    if (request.method === "DELETE") {
       rules.delete(id);
       response.statusCode = 204;
       response.end();

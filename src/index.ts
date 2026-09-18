@@ -162,7 +162,7 @@ export default defineToolPlugin({
     tool({
       name: "firefly_rule_test",
       label: "Test Firefly rule",
-      description: "Use Firefly's native non-mutating test endpoint and return normalized matches.",
+      description: "Fetch the persisted rule, deterministically compile its triggers to Firefly search syntax, and return normalized preview matches.",
       parameters: Type.Object(
         {
           id: Id,

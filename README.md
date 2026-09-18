@@ -2,7 +2,7 @@
 
 A narrow OpenClaw tool plugin for inspecting Firefly III and proposing category rules safely. It implements **Phase 1** and **Phase 2** of [`docs/TECHNICAL_SPEC.md`](docs/TECHNICAL_SPEC.md).
 
-The plugin can read transactions, categories, rules, and rule groups. Its only write workflow creates an inactive, marked rule; previews matches with Firefly's native rule-test endpoint; then updates, confirms, or rejects only that marked pending rule.
+The plugin can read transactions, categories, rules, and rule groups. Its only write workflow creates an inactive, marked rule; previews the persisted rule by translating its triggers to the same Firefly search syntax used by the web UI; then updates, confirms, or rejects only that marked pending rule.
 
 ## Safety boundaries
 
@@ -14,6 +14,7 @@ The plugin can read transactions, categories, rules, and rule groups. Its only w
 - Per-rule calls are serialized inside one Gateway process. Firefly v6.7.2 has no CAS or conditional DELETE, so external UI/other-process writers remain outside that lock.
 - Rejection is disabled by default. Operators may explicitly enable best-effort pending deletion only under a no-external-rule-writers assumption; Firefly cannot atomically protect the check/delete interval.
 - No transaction mutation/deletion, generic HTTP, generic rule deletion, or rule trigger endpoint is exposed.
+- `firefly_rule_test` performs all preview translation inside the plugin: it fetches the persisted rule, compiles only reviewed trigger types, and searches Firefly. Unsupported triggers fail closed.
 - No categorizer skill or Telegram workflow is included yet.
 
 ## Requirements
@@ -84,6 +85,8 @@ Read only:
 - `firefly_rule_get`
 - `firefly_rule_groups_list`
 - `firefly_rule_test`
+
+`firefly_rule_test` needs only a rule ID for normal use. Optional date/account filters and a result cap are applied by the plugin. The result includes the generated query (or ordered queries for a non-strict rule), normalized transaction matches, and a truncation indicator.
 
 Constrained writes:
 
