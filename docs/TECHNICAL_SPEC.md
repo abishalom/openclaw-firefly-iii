@@ -10,7 +10,7 @@
 
 ## 1. Purpose
 
-Build a small, security-constrained OpenClaw integration for an existing self-hosted Firefly III instance. The integration should help identify deterministic transaction-categorization patterns, create those patterns as **inactive Firefly rules**, use Firefly's own rule test endpoint to preview historical matches, present the proposal to the user in Telegram, and only activate the rule after explicit approval.
+Build a small, security-constrained OpenClaw integration for an existing self-hosted Firefly III instance. The integration should help identify deterministic transaction-categorization patterns, create those patterns as **inactive Firefly rules**, preview the persisted rule through Firefly's search engine, present the proposal to the user in Telegram, and only activate the rule after explicit approval.
 
 The system should avoid reimplementing Firefly's matching engine. Firefly III remains the source of truth for transactions and rule semantics; OpenClaw supplies reasoning, workflow, and human approval.
 
@@ -153,7 +153,7 @@ Important: Firefly III v6.6.0 invalidated previous OAuth tokens/clients. The imp
                               ┌───────────────────────────┐
                               │     Firefly III v6.7+    │
                               │ transactions/categories  │
-                              │ native rules + rule test │
+                              │ native rules + preview   │
                               └───────────────────────────┘
 ```
 
@@ -173,7 +173,7 @@ Important: Firefly III v6.6.0 invalidated previous OAuth tokens/clients. The imp
 - Checks existing rules.
 - Proposes deterministic rule logic.
 - Creates an inactive pending rule.
-- Calls Firefly's test endpoint.
+- Calls the plugin's single rule-preview tool; the skill does not translate triggers.
 - Summarizes matches/counterexamples.
 - Presents the proposal in Telegram.
 - Requires explicit user confirmation before activation.
@@ -182,7 +182,7 @@ Important: Firefly III v6.6.0 invalidated previous OAuth tokens/clients. The imp
 - Owns transaction data.
 - Owns categories.
 - Owns rule semantics.
-- Executes the rule test.
+- Executes the search produced from the persisted rule.
 - Runs confirmed rules during normal Firefly/data-import workflows.
 
 **Telegram**
@@ -300,10 +300,10 @@ No category create/update/delete tool is required for v1.
 | get rule | `GET /v1/rules/{id}` | Inspect one rule |
 | create rule | `POST /v1/rules` | Create a pending inactive proposal |
 | update rule | `PUT /v1/rules/{id}` | Edit pending proposal; later activate after confirmation |
-| test rule | `GET /v1/rules/{id}/test` | Let Firefly determine historical matches without making changes |
+| preview rule | `GET /v1/rules/{id}` then `GET /v1/search/transactions` | Fetch persisted semantics, compile them inside the plugin, and find historical matches without changes |
 | delete rule | `DELETE /v1/rules/{id}` | Internal-only implementation primitive for rejecting/expiring OpenClaw pending rules |
 
-`GET /v1/rules/{id}/test` supports date-range constraints and account filters in the published/generated Firefly API descriptions. The implementation should expose safe optional filters rather than always testing the entire database.
+Firefly's web preview uses `RuleRepository::getSearchQuery`, not the documented native rule-test endpoint. The plugin mirrors that translation for its reviewed trigger subset and exposes safe optional date/account filters. Strict rules use one AND query; non-strict rules use ordered searches whose results are unioned inside the plugin.
 
 The Firefly API also exposes `POST /v1/rules/{id}/trigger`. **Do not expose or use this in v1.** The purpose of v1 is to create future deterministic behavior, not bulk-edit historical data.
 
@@ -470,7 +470,7 @@ If Firefly adds new action types in a future release, they remain denied until e
 4. Skill chooses an existing category.
 5. Skill calls firefly_rule_create_pending.
 6. Plugin creates inactive Firefly rule.
-7. Skill calls firefly_rule_test on the actual Firefly rule.
+7. Skill calls firefly_rule_test on the actual persisted Firefly rule; the plugin translates it to Firefly search syntax and runs the preview.
 8. Firefly returns transactions that WOULD match; no changes are made.
 9. Skill summarizes results and sends proposal to Telegram.
 10. User confirms, edits, or rejects.
@@ -562,7 +562,7 @@ The skill should instruct the agent to:
 5. Use existing Firefly categories; do not invent/create categories in v1.
 6. Avoid proposing a rule from one isolated example unless the user explicitly asks.
 7. Create the candidate as an inactive Firefly rule.
-8. Use Firefly's own `/rules/{id}/test` result as the authoritative match set.
+8. Use `firefly_rule_test` on the persisted rule as the authoritative preview; trigger-to-search translation must remain inside the plugin.
 9. Show representative matches and counterexamples.
 10. Never confirm/activate a pending rule without explicit user approval in the conversation.
 11. On edits, retest before presenting the revised rule.
@@ -687,7 +687,11 @@ create pending inactive rule
         ↓
 verify rule remains inactive
         ↓
-GET /rules/{id}/test
+GET /rules/{id}
+        ↓
+plugin compiles persisted triggers
+        ↓
+GET /search/transactions
         ↓
 verify expected match set
         ↓
@@ -780,7 +784,7 @@ Acceptance: OpenClaw can safely inspect Firefly through the security layer witho
 Deliver:
 
 - create pending inactive rule
-- test rule using Firefly native test endpoint
+- preview the persisted rule using deterministic plugin-side translation to Firefly search syntax
 - update pending rule
 - confirm pending rule
 - reject pending rule
@@ -838,7 +842,7 @@ The initial project is complete when:
 5. Secrets are not placed in source, prompts, normal logs, or tool results.
 6. The agent can list/search transactions, categories, rules, and rule groups.
 7. The agent can create an inactive pending categorization rule.
-8. Firefly's native test endpoint is used to produce the match set.
+8. The persisted Firefly rule is deterministically translated inside the plugin to the same search syntax used by Firefly's web preview; the model never performs this translation.
 9. The pending rule can be edited and retested.
 10. Confirmation activates only the exact existing pending rule after explicit user approval.
 11. Rejection deletes only an OpenClaw-owned pending rule.
@@ -859,7 +863,7 @@ Before coding the Firefly models, fetch or inspect the **current Firefly III v6.
 - appropriate field for plugin pending/ownership metadata;
 - rule group requirements when creating a rule;
 - pagination and search query semantics;
-- `GET /rules/{id}/test` query parameters and any current-version quirks;
+- Firefly's persisted-rule-to-search translation, search aliases, and native rule-test quirks;
 - media types expected by Firefly (`application/json` vs `application/vnd.api+json` where relevant).
 
 Do not blindly copy old generated client schemas. Use the current running version as the compatibility target.

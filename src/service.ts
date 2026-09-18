@@ -4,14 +4,23 @@ import {
   assertAllowedActions, assertAllowedTriggers, assertPendingRule, createConfirmedDescription,
   createPendingDescription, parsePendingDescription, proposalDigest, updatePendingDescription,
 } from "./rule-safety.js";
+import { compileRulePreview } from "./rule-preview.js";
 import { normalizeCategoryCollection, normalizeRuleCollection, normalizeRuleGroupCollection, normalizeRuleSingle, type NormalizedRule, type RuleActionInput, type RuleMoment, type RuleTriggerInput } from "./schemas/rules.js";
-import { normalizeTransactionCollection, normalizeTransactionSingle } from "./schemas/transactions.js";
+import { normalizeTransactionCollection, normalizeTransactionSingle, type NormalizedTransactionGroup, type TransactionPage } from "./schemas/transactions.js";
 
 export interface PageParams { page?: number; limit?: number; }
 export interface TransactionListParams extends PageParams { start?: string; end?: string; type?: string; }
 export interface TransactionSearchParams extends PageParams { query: string; }
 export interface CategoryListParams extends PageParams { start?: string; end?: string; }
 export interface RuleTestParams { id: string; start?: string; end?: string; accountIds?: string[]; maxResults?: number; }
+export interface RulePreviewResult extends TransactionPage {
+  ruleId: string;
+  strict: boolean;
+  queries: string[];
+  executedQueries: number;
+  previewEngine: "firefly-search";
+  truncated: boolean;
+}
 export interface CreatePendingRuleInput { title: string; description?: string; ruleGroupId: string; trigger?: RuleMoment; strict?: boolean; stopProcessing?: boolean; order?: number; triggers: RuleTriggerInput[]; actions: RuleActionInput[]; }
 export interface UpdatePendingRuleInput { id: string; title?: string; description?: string; ruleGroupId?: string; trigger?: RuleMoment; strict?: boolean; stopProcessing?: boolean; order?: number; triggers?: RuleTriggerInput[]; actions?: RuleActionInput[]; }
 
@@ -36,7 +45,98 @@ export class FireflyService {
   async listRules(params: PageParams, signal?: AbortSignal) { return normalizeRuleCollection(await this.client.get<unknown>("/rules", { query: { page: params.page, limit: params.limit }, ...withSignal(signal) })); }
   async getRule(id: string, signal?: AbortSignal): Promise<NormalizedRule> { return normalizeRuleSingle(await this.client.get<unknown>(`/rules/${resourceId(id)}`, withSignal(signal))); }
   async listRuleGroups(params: PageParams, signal?: AbortSignal) { return normalizeRuleGroupCollection(await this.client.get<unknown>("/rule-groups", { query: { page: params.page, limit: params.limit }, ...withSignal(signal) })); }
-  async testRule(params: RuleTestParams, signal?: AbortSignal) { const id = resourceId(params.id); return normalizeTransactionCollection(await this.client.get<unknown>(`/rules/${id}/test`, { query: { start: params.start, end: params.end, "accounts[]": params.accountIds }, ...withSignal(signal) }), params.maxResults ?? 100); }
+  async testRule(params: RuleTestParams, signal?: AbortSignal): Promise<RulePreviewResult> {
+    const id = resourceId(params.id);
+    const maxResults = params.maxResults ?? 100;
+    if (!Number.isInteger(maxResults) || maxResults < 1 || maxResults > 500) {
+      throw new FireflyError("FIREFLY_VALIDATION_FAILED", "maxResults must be an integer from 1 to 500.");
+    }
+    if (params.start !== undefined) validateDateOnly(params.start, "start");
+    if (params.end !== undefined) validateDateOnly(params.end, "end");
+    if (params.accountIds !== undefined && (params.accountIds.length < 1 || params.accountIds.length > 100)) {
+      throw new FireflyError("FIREFLY_VALIDATION_FAILED", "accountIds must contain 1 to 100 Firefly account IDs.");
+    }
+    const accountIds = params.accountIds?.map(resourceId);
+    const rule = await this.getRule(id, signal);
+    const compiled = compileRulePreview(rule, {
+      ...(params.start === undefined ? {} : { start: params.start }),
+      ...(params.end === undefined ? {} : { end: params.end }),
+      ...(accountIds === undefined ? {} : { accountIds }),
+    });
+    const transactions: NormalizedTransactionGroup[] = [];
+    const seenIds = new Set<string>();
+    let truncated = false;
+    let total: number | null = 0;
+    let executedQueries = 0;
+
+    for (let index = 0; index < compiled.queries.length; index += 1) {
+      const query = compiled.queries[index];
+      if (query === undefined) continue;
+      const result = await this.searchPreviewQuery(query, maxResults, signal);
+      executedQueries += 1;
+      if (compiled.strict) total = result.total;
+      else total = null;
+      for (const transaction of result.transactions) {
+        if (seenIds.has(transaction.id)) continue;
+        seenIds.add(transaction.id);
+        if (transactions.length < maxResults) transactions.push(transaction);
+        else truncated = true;
+      }
+      if (result.truncated) truncated = true;
+      if (compiled.triggerStopProcessing[index] && result.transactions.length > 0) break;
+      if (transactions.length >= maxResults && index < compiled.queries.length - 1) {
+        truncated = true;
+        break;
+      }
+    }
+
+    return {
+      ruleId: rule.id,
+      strict: compiled.strict,
+      queries: compiled.queries,
+      executedQueries,
+      previewEngine: "firefly-search",
+      truncated,
+      transactions,
+      pagination: {
+        total,
+        count: transactions.length,
+        perPage: maxResults,
+        currentPage: 1,
+        totalPages: compiled.strict && !truncated ? 1 : null,
+      },
+    };
+  }
+
+  private async searchPreviewQuery(query: string, maxResults: number, signal?: AbortSignal): Promise<{
+    transactions: NormalizedTransactionGroup[];
+    total: number | null;
+    truncated: boolean;
+  }> {
+    const transactions: NormalizedTransactionGroup[] = [];
+    let page = 1;
+    let total: number | null = null;
+    let truncated = false;
+    while (transactions.length < maxResults) {
+      const limit = Math.min(100, maxResults - transactions.length);
+      const result = await this.searchTransactions({ query, page, limit }, signal);
+      transactions.push(...result.transactions.slice(0, maxResults - transactions.length));
+      total = result.pagination.total;
+      const currentPage = result.pagination.currentPage;
+      const totalPages = result.pagination.totalPages;
+      const hasAnotherPage = totalPages === null
+        ? result.transactions.length >= limit
+        : currentPage < totalPages;
+      if (!hasAnotherPage || result.transactions.length === 0) break;
+      if (transactions.length >= maxResults) {
+        truncated = true;
+        break;
+      }
+      page = currentPage + 1;
+    }
+    if (total !== null && total > transactions.length) truncated = true;
+    return { transactions, total, truncated };
+  }
 
   async createPendingRule(input: CreatePendingRuleInput, signal?: AbortSignal): Promise<NormalizedRule> {
     validateRuleTitle(input.title); resourceId(input.ruleGroupId); assertAllowedTriggers(input.triggers); assertAllowedActions(input.actions);
@@ -218,4 +318,5 @@ function mergeProposal(existing: NormalizedRule, input: UpdatePendingRuleInput):
 function snapshot(rule: Pick<NormalizedRule, "title" | "ruleGroupId" | "order" | "trigger" | "strict" | "stopProcessing" | "triggers" | "actions">, active: boolean, description: string): Record<string, unknown> { return { title: rule.title, description, rule_group_id: resourceId(rule.ruleGroupId), order: rule.order ?? 1, trigger: rule.trigger, active, strict: rule.strict, stop_processing: rule.stopProcessing, triggers: rule.triggers.map((x, i) => ({ type: x.type, value: x.value, prohibited: x.prohibited, order: x.order ?? i + 1, active: x.active, stop_processing: x.stopProcessing })), actions: rule.actions.map((x, i) => ({ type: x.type, value: x.value, order: x.order ?? i + 1, active: x.active, stop_processing: x.stopProcessing })) }; }
 function withSignal(signal: AbortSignal | undefined): { signal: AbortSignal } | Record<string, never> { return signal === undefined ? {} : { signal }; }
 function resourceId(id: string): string { if (!/^[1-9]\d*$/u.test(id)) throw new FireflyError("FIREFLY_VALIDATION_FAILED", "Firefly resource IDs must be non-zero canonical numeric strings without leading zeroes."); return encodeURIComponent(id); }
+function validateDateOnly(value: string, field: "start" | "end"): void { if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) throw new FireflyError("FIREFLY_VALIDATION_FAILED", `${field} must use YYYY-MM-DD format.`); }
 function validateRuleTitle(title: string): void { if (title.trim() === "" || title.length > 100) throw new FireflyError("FIREFLY_RULE_UNSAFE", "Rule title must contain 1 to 100 characters."); }

@@ -8,7 +8,7 @@
 | `accessToken` | yes | — | Firefly bearer token. Use an OpenClaw SecretRef. |
 | `headers` | no | `{}` | Operator-controlled headers added to every request. Every value is a declared secret-input path and may be a literal or SecretRef in source config. |
 | `requestTimeoutMs` | no | `10000` | 100–120000 ms, including response body consumption. |
-| `maxResponseBytes` | no | `5242880` | 1024–10485760 bytes. Bodies exceeding this limit are cancelled before parsing; this bounds memory used by large rule-test responses. |
+| `maxResponseBytes` | no | `5242880` | 1024–10485760 bytes. Bodies exceeding this limit are cancelled before parsing; this bounds memory used by large preview/search responses. |
 | `allowInsecureHttp` | no | `false` | Allows HTTP only when explicitly enabled for a trusted local/test deployment. |
 | `allowBestEffortPendingRuleDeletion` | no | `false` | Enables rejection DELETE only where no external rule writers exist; Firefly v6.7.2 has no conditional DELETE. |
 

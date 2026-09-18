@@ -35,9 +35,11 @@ Requests use `application/json`. The client accepts both `application/vnd.api+js
 | list rules | `GET /v1/rules` | `page`, `limit` |
 | get rule | `GET /v1/rules/{id}` | ID |
 | list rule groups | `GET /v1/rule-groups` | `page`, `limit` |
-| test rule | `GET /v1/rules/{id}/test` | `start`, `end`, repeated `accounts[]` |
+| documented native rule test | `GET /v1/rules/{id}/test` | `start`, `end`, repeated `accounts[]` |
 
-The test endpoint returns `TransactionArray`. v6.7.2 source internally uses a very large fixed paginator and its OpenAPI does not advertise a `limit`; the plugin therefore does not send a fictional server-side limit. `maxResults` only bounds normalized tool output.
+The native test endpoint returns `TransactionArray`, but a verified v6.7.2 deployment returned an empty set for a rule that Firefly's own web preview matched. The web preview does not call this endpoint: `Rule\IndexController::search` calls `RuleRepository::getSearchQuery` and redirects to Firefly search.
+
+Accordingly, `firefly_rule_test` fetches the persisted rule and mirrors the v6.7.2 search translation inside the plugin, then calls `GET /v1/search/transactions`. Strict rules compile to one AND query. Non-strict rules compile to ordered per-trigger searches whose normalized results are unioned; trigger-level stop-processing is honored. Aliases, prohibited triggers, context-free triggers, optional date bounds, and optional account IDs are translated deterministically. Trigger types outside the plugin's reviewed allowlist fail closed. `maxResults` bounds normalized tool output and the result reports whether it was truncated.
 
 ### `RuleStore`
 
@@ -70,7 +72,8 @@ Firefly upgrades require rerunning the lifecycle integration tests and reviewing
 1. `RuleStore` / `RuleUpdate` validators and schemas;
 2. trigger and action keyword lists;
 3. transaction/rule transformers;
-4. `/rules/{id}/test` behavior;
-5. response media types and envelopes.
+4. the web rule-to-search translation and `/search/transactions` behavior;
+5. `/rules/{id}/test` behavior, so the documented endpoint can be reconsidered if fixed;
+6. response media types and envelopes.
 
 New action keywords are denied until explicitly reviewed.
