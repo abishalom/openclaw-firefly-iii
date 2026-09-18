@@ -32,6 +32,9 @@ Requests use `application/json`. The client accepts both `application/vnd.api+js
 | get transaction | `GET /v1/transactions/{id}` | numeric/string path ID |
 | search transactions | `GET /v1/search/transactions` | required `query`, `page`, `limit` |
 | list categories | `GET /v1/categories` | `page`, `limit`, optional enrichment range |
+| list budgets | `GET /v1/budgets` | `page`, `limit`, optional enrichment range |
+| list tags | `GET /v1/tags` | `page`, `limit` |
+| list accounts | `GET /v1/accounts` | `type=all`, `page`, `limit` |
 | list rules | `GET /v1/rules` | `page`, `limit` |
 | get rule | `GET /v1/rules/{id}` | ID |
 | list rule groups | `GET /v1/rule-groups` | `page`, `limit` |
@@ -59,7 +62,9 @@ Top-level rule moments are:
 
 The plugin's trigger allowlist is copied from the v6.7.2 OpenAPI `RuleTriggerKeyword` enum. The v6.7.2 source validator derives a larger set from `config/search.php`; the published enum is incomplete. To avoid silently depending on undocumented values, this plugin exposes only the published subset.
 
-The v6.7.2 source action configuration contains more keywords than the OpenAPI enum (for example account switching and amount changes). None are relevant here: plugin code accepts only exact keyword `set_category`.
+The v6.7.2 source action configuration contains more keywords than the OpenAPI enum. The plugin accepts only the reviewed exact keywords `set_category`, `set_budget`, `add_tag`, `remove_tag`, `set_description`, `set_notes`, `set_source_account`, `set_destination_account`, and `convert_transfer`. Firefly expresses transaction-type changes as `convert_*` actions rather than `set_transaction_type`; only `convert_transfer` is exposed.
+
+Named targets are checked against the read endpoints before create, update, and confirm. `convert_withdrawal` and `convert_deposit` remain denied because Firefly can create new expense/revenue accounts from their action values. Amount changes, deletion, account switching, cash-account shortcuts, bill/piggy-bank links, clear-all operations, and every other action remain denied.
 
 ### Ownership metadata
 

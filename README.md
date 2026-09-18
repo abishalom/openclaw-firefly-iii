@@ -1,14 +1,15 @@
 # openclaw-firefly
 
-A narrow OpenClaw tool plugin for inspecting Firefly III and proposing category rules safely. It implements **Phase 1** and **Phase 2** of [`docs/TECHNICAL_SPEC.md`](docs/TECHNICAL_SPEC.md).
+A narrow OpenClaw tool plugin for inspecting Firefly III and proposing deterministic rules safely. It implements **Phase 1** and **Phase 2** of [`docs/TECHNICAL_SPEC.md`](docs/TECHNICAL_SPEC.md).
 
-The plugin can read transactions, categories, rules, and rule groups. Its only write workflow creates an inactive, marked rule; previews the persisted rule by translating its triggers to the same Firefly search syntax used by the web UI; then updates, confirms, or rejects only that marked pending rule.
+The plugin can read transactions, categories, budgets, tags, accounts, rules, and rule groups. Its only write workflow creates an inactive, marked rule; previews the persisted rule by translating its triggers to the same Firefly search syntax used by the web UI; then updates, confirms, or rejects only that marked pending rule.
 
 ## Safety boundaries
 
 - New rules are forced inactive.
-- Only the Firefly `set_category` action is accepted.
-- The category must already exist in Firefly.
+- Actions are limited to `set_category`, `set_budget`, `add_tag`, `remove_tag`, `set_description`, `set_notes`, `set_source_account`, `set_destination_account`, and `convert_transfer`.
+- Categories, active budgets, tags, and active accounts referenced by actions must already exist with the exact supplied name. The plugin never creates these targets.
+- Each non-tag action may appear at most once. Tag actions may repeat for different existing tags, but the same rule cannot add and remove the same tag.
 - Update, confirmation, and rejection verify an anchored marker and SHA-256 digest of the complete semantic proposal.
 - Confirmation requires the reviewed `proposalDigest`, reasserts and verifies a complete inactive snapshot, then uses a minimal activation update. A failed or ambiguous activation is rolled back to inactive when ownership can still be verified; otherwise the tool reports `FIREFLY_ACTIVATION_UNCERTAIN` for operator inspection.
 - Per-rule calls are serialized inside one Gateway process. Firefly v6.7.2 has no CAS or conditional DELETE, so external UI/other-process writers remain outside that lock.
@@ -36,6 +37,15 @@ npm run check # use Node 26.1+; invokes the repository-local OpenClaw CLI
 ```
 
 `plugin:validate` needs a supported Node version because the local OpenClaw CLI enforces its Node floor.
+
+For a path-installed source checkout, every update must rebuild the ignored `dist/` output before restarting the Gateway:
+
+```sh
+git pull --ff-only
+npm ci
+npm run build
+openclaw gateway restart
+```
 
 ## Configuration
 
@@ -81,6 +91,9 @@ Read only:
 - `firefly_transaction_get`
 - `firefly_transactions_search`
 - `firefly_categories_list`
+- `firefly_budgets_list`
+- `firefly_tags_list`
+- `firefly_accounts_list`
 - `firefly_rules_list`
 - `firefly_rule_get`
 - `firefly_rule_groups_list`

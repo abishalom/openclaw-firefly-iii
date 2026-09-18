@@ -1,7 +1,7 @@
 # OpenClaw ↔ Firefly III Integration
 ## Technical Specification for a Safe Rule-Proposal Plugin
 
-**Status:** Draft v1.0 for implementation
+**Status:** Implemented scope, revised for curated rule actions
 **Target:** OpenClaw tool plugin + companion skill
 **Verified against:** Firefly III **v6.7.2** (current stable as of 2026-09-17) and current OpenClaw tool-plugin/SecretRef documentation
 **Recommended repository:** `openclaw-firefly`
@@ -26,7 +26,7 @@ Reduce ongoing LLM involvement by converting recurring categorization decisions 
 - No generic Firefly rule deletion capability.
 - No automatic activation of newly proposed rules.
 - No execution/triggering of rules against historical transactions.
-- No changes to transaction amount, source account, destination account, transaction type, or other financially sensitive fields.
+- No changes to transaction amount, currency, deletion state, or arbitrary financially sensitive fields. Account changes and conversion to transfers are allowed only through reviewed pending rules.
 - No custom Firefly fork or modification.
 - No separate microservice unless future constraints require one.
 
@@ -341,6 +341,9 @@ firefly_transactions_list
 firefly_transaction_get
 firefly_transactions_search
 firefly_categories_list
+firefly_budgets_list
+firefly_tags_list
+firefly_accounts_list
 firefly_rules_list
 firefly_rule_get
 firefly_rule_test
@@ -429,28 +432,28 @@ Avoid dumping large raw API payloads into model context when a normalized repres
 
 The plugin, not merely the skill, must enforce a hard allowlist.
 
-### 8.1 Initial allowed actions
-
-For v1:
+### 8.1 Allowed actions
 
 - `set_category`
-
-Optional after initial validation:
-
+- `set_budget`
 - `add_tag`
+- `remove_tag`
+- `set_description`
+- `set_notes`
+- `set_source_account`
+- `set_destination_account`
+- `convert_transfer`
 
-The implementation must map these names to the exact Firefly `RuleActionKeyword` values used by v6.7.2.
+Named targets must already exist. Firefly uses `convert_transfer`, not `set_transaction_type`, for the supported transaction-type change.
 
 ### 8.2 Explicitly prohibited through this plugin
 
 - delete transaction
 - modify amount
 - modify currency
-- change source account
-- change destination account
 - switch accounts
-- change transaction type
-- create/modify arbitrary notes with secrets
+- convert to withdrawal or deposit
+- include credentials or other secrets in descriptions or notes
 - invoke webhook/network-related side effects
 - execute rules against historical transactions
 - arbitrary rule deletion

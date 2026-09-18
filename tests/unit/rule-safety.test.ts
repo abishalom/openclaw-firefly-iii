@@ -56,8 +56,34 @@ describe("pending rule safety", () => {
     expect(() => assertPendingRule(rule({ active: true }))).toThrowError(FireflyError);
   });
 
-  it("allows only set_category and rejects dangerous actions", () => {
-    expect(() => assertAllowedActions([{ type: "set_category", value: "Groceries" }])).not.toThrow();
+  it("allows category, destination, or one of each and rejects dangerous actions", () => {
+    const individuallyAllowed = [
+      { type: "set_category", value: "Groceries" },
+      { type: "set_budget", value: "Household" },
+      { type: "add_tag", value: "recurring" },
+      { type: "remove_tag", value: "uncategorized" },
+      { type: "set_description", value: "Credit card autopay" },
+      { type: "set_notes", value: "Normalized by an approved rule" },
+      { type: "set_source_account", value: "Checking" },
+      { type: "set_destination_account", value: "Sarah's Tent" },
+      { type: "convert_transfer", value: "Credit Card" },
+    ] as const;
+    for (const action of individuallyAllowed) {
+      expect(() => assertAllowedActions([action])).not.toThrow();
+    }
+    expect(() => assertAllowedActions([
+      { type: "set_category", value: "Groceries" },
+      { type: "set_destination_account", value: "Sarah's Tent" },
+    ])).not.toThrow();
+    expect(() => assertAllowedActions([
+      { type: "set_budget", value: "Household" },
+      { type: "add_tag", value: "recurring" },
+      { type: "remove_tag", value: "uncategorized" },
+      { type: "set_description", value: "Credit card autopay" },
+      { type: "set_notes", value: "Normalized by an approved rule" },
+      { type: "set_source_account", value: "Checking" },
+      { type: "convert_transfer", value: "Credit Card" },
+    ])).not.toThrow();
     expect(() => assertAllowedActions([{ type: "delete_transaction", value: "x", active: true }])).toThrowError(
       /not allowed/u,
     );
@@ -66,7 +92,21 @@ describe("pending rule safety", () => {
     );
   });
 
-  it("requires a non-empty category", () => {
+  it("requires non-empty targets and rejects duplicate action types", () => {
+    expect(() => assertAllowedActions([])).toThrowError(/1 to 20/u);
     expect(() => assertAllowedActions([{ type: "set_category", value: "" }])).toThrowError(/non-empty/u);
+    expect(() => assertAllowedActions([{ type: "set_destination_account", value: "" }])).toThrowError(/non-empty/u);
+    expect(() => assertAllowedActions([
+      { type: "set_category", value: "Groceries" },
+      { type: "set_category", value: "Dining" },
+    ])).toThrowError(/at most one set_category/u);
+    expect(() => assertAllowedActions([
+      { type: "set_destination_account", value: "Sarah's Tent" },
+      { type: "set_destination_account", value: "Other" },
+    ])).toThrowError(/at most one set_destination_account/u);
+    expect(() => assertAllowedActions([
+      { type: "add_tag", value: "recurring" },
+      { type: "remove_tag", value: "recurring" },
+    ])).toThrowError(/cannot both add and remove/u);
   });
 });

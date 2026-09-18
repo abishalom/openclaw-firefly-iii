@@ -65,12 +65,20 @@ describe("pending rule lifecycle", () => {
       description: "Created by an integration test",
       ruleGroupId: "7",
       triggers: [{ type: "description_contains", value: "SUPER 99" }],
-      actions: [{ type: "set_category", value: "Groceries" }],
+      actions: [
+        { type: "set_category", value: "Groceries" },
+        { type: "set_destination_account", value: "Super 99" },
+      ],
     });
     expect(created.active).toBe(false);
     expect(created.pending).toBe(true);
     expect(rules.get(created.id)?.active).toBe(false);
     expect(rules.get(created.id)?.description).toMatch(/^\[openclaw-firefly:pending:v1;/u);
+    expect(rules.get(created.id)?.actions.map((action) => action.type)).toEqual([
+      "set_category",
+      "set_destination_account",
+    ]);
+    expect(requests.some((request) => request.path === "/api/v1/accounts")).toBe(true);
 
     const firstTest = await service.testRule({ id: created.id, maxResults: 50 });
     expect(firstTest.transactions).toHaveLength(2);
@@ -259,6 +267,57 @@ describe("pending rule lifecycle", () => {
     ).rejects.toBeInstanceOf(FireflyError);
     expect(requests).toHaveLength(before);
   });
+
+  it("accepts a destination-only proposal and rejects a missing destination account", async () => {
+    const created = await service.createPendingRule({
+      title: "Route to Super 99",
+      ruleGroupId: "7",
+      triggers: [{ type: "description_is", value: "SUPER 99" }],
+      actions: [{ type: "set_destination_account", value: "Super 99" }],
+    });
+    expect(created.actions).toMatchObject([
+      { type: "set_destination_account", value: "Super 99" },
+    ]);
+
+    const postCount = requests.filter((request) => request.method === "POST").length;
+    await expect(service.createPendingRule({
+      title: "Missing destination",
+      ruleGroupId: "7",
+      triggers: [{ type: "description_is", value: "MISSING" }],
+      actions: [{ type: "set_destination_account", value: "Does Not Exist" }],
+    })).rejects.toMatchObject({ code: "FIREFLY_RULE_UNSAFE" });
+    expect(requests.filter((request) => request.method === "POST")).toHaveLength(postCount);
+  });
+
+  it("accepts the curated metadata, text, account, and transfer actions", async () => {
+    const created = await service.createPendingRule({
+      title: "Normalize credit card autopay",
+      ruleGroupId: "7",
+      triggers: [{ type: "description_contains", value: "AUTOPAY" }],
+      actions: [
+        { type: "set_category", value: "Groceries" },
+        { type: "set_budget", value: "Household" },
+        { type: "add_tag", value: "recurring" },
+        { type: "remove_tag", value: "imported" },
+        { type: "set_description", value: "Credit card autopay" },
+        { type: "set_notes", value: "Normalized by an approved rule" },
+        { type: "convert_transfer", value: "Credit Card" },
+        { type: "set_source_account", value: "Checking" },
+        { type: "set_destination_account", value: "Credit Card" },
+      ],
+    });
+    expect(created.actions.map((action) => action.type)).toEqual([
+      "set_category",
+      "set_budget",
+      "add_tag",
+      "remove_tag",
+      "set_description",
+      "set_notes",
+      "convert_transfer",
+      "set_source_account",
+      "set_destination_account",
+    ]);
+  });
 });
 
 async function route(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -270,6 +329,22 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
 
   if (request.method === "GET" && url.pathname === "/api/v1/categories") {
     return collection(response, [resource("categories", "1", { name: "Groceries", notes: null })]);
+  }
+  if (request.method === "GET" && url.pathname === "/api/v1/accounts") {
+    return collection(response, [
+      resource("accounts", "2", { name: "Super 99", type: "expense", active: true }),
+      resource("accounts", "3", { name: "Checking", type: "asset", active: true }),
+      resource("accounts", "4", { name: "Credit Card", type: "debt", active: true }),
+    ]);
+  }
+  if (request.method === "GET" && url.pathname === "/api/v1/budgets") {
+    return collection(response, [resource("budgets", "5", { name: "Household", active: true, order: 1, notes: null })]);
+  }
+  if (request.method === "GET" && url.pathname === "/api/v1/tags") {
+    return collection(response, [
+      resource("tags", "6", { tag: "recurring", description: null }),
+      resource("tags", "7", { tag: "imported", description: null }),
+    ]);
   }
   if (request.method === "GET" && url.pathname === "/api/v1/search/transactions") {
     const query = url.searchParams.get("query") ?? "";

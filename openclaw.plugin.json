@@ -1,8 +1,8 @@
 {
   "id": "openclaw-firefly",
   "name": "Firefly III",
-  "description": "Safely inspect Firefly III and manage inactive, OpenClaw-owned category rule proposals.",
-  "version": "0.1.1",
+  "description": "Safely inspect Firefly III and manage inactive, OpenClaw-owned rule proposals.",
+  "version": "0.2.0",
   "configSchema": {
     "type": "object",
     "required": [
@@ -78,6 +78,9 @@
       "firefly_transaction_get",
       "firefly_transactions_search",
       "firefly_categories_list",
+      "firefly_budgets_list",
+      "firefly_tags_list",
+      "firefly_accounts_list",
       "firefly_rules_list",
       "firefly_rule_get",
       "firefly_rule_groups_list",

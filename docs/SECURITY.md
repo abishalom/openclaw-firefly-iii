@@ -2,7 +2,7 @@
 
 ## Exposed capability
 
-The model can read a paginated subset of Firefly data and manage one constrained lifecycle: an inactive category-rule proposal owned by this plugin.
+The model can read a paginated subset of Firefly data and manage one constrained lifecycle: an inactive rule proposal owned by this plugin.
 
 The plugin does **not** expose:
 
@@ -10,8 +10,8 @@ The plugin does **not** expose:
 - transaction update/delete operations;
 - Firefly rule trigger/execution endpoints;
 - generic rule deletion;
-- category, rule-group, account, or currency mutation;
-- source/destination account, amount, currency, type, notes, webhook, or delete actions.
+- category, budget, tag, account, rule-group, or currency creation/mutation outside the pending-rule workflow;
+- amount, currency, webhook, arbitrary transaction-type, or delete actions.
 
 ## Pending ownership
 
@@ -27,7 +27,11 @@ A module-level keyed mutex serializes these sequences per canonical non-zero rul
 
 ## Action policy
 
-Only exact action keyword `set_category` is allowed. The target category name is verified against existing Firefly categories before create, update, or confirm. This matters because Firefly's `SetCategory` implementation can otherwise create a missing category when a rule runs.
+The exact allowed keywords are `set_category`, `set_budget`, `add_tag`, `remove_tag`, `set_description`, `set_notes`, `set_source_account`, `set_destination_account`, and `convert_transfer`. Unknown keywords fail closed.
+
+Before create, update, or confirmation, the plugin verifies exact existing names for categories, active budgets, tags, and active accounts. This prevents Firefly rule actions from creating near-duplicate metadata or silently targeting an unintended object. Duplicate singleton actions and contradictory add/remove operations for the same tag are rejected.
+
+`convert_transfer` is the only transaction-type conversion exposed. Firefly has no generic `set_transaction_type` rule action. Withdrawal/deposit conversions remain denied because Firefly may create a missing expense or revenue account from their action value. Transfer conversion and account changes still require an inactive digest-bound proposal and explicit confirmation.
 
 All unknown or newly introduced Firefly actions remain denied by default.
 

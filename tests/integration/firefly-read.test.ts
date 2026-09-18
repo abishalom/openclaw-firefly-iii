@@ -26,6 +26,12 @@ beforeAll(async () => {
         return json(response, { data: transactionResource("10") });
       case "/api/v1/categories":
         return collection(response, [resource("categories", "2", { name: "Groceries", notes: null })]);
+      case "/api/v1/budgets":
+        return collection(response, [resource("budgets", "5", { name: "Household", active: true, order: 1, notes: null })]);
+      case "/api/v1/tags":
+        return collection(response, [resource("tags", "6", { tag: "recurring", description: "Recurring payment" })]);
+      case "/api/v1/accounts":
+        return collection(response, [resource("accounts", "7", { name: "Checking", type: "asset", active: true })]);
       case "/api/v1/rules":
         return collection(response, [ruleResource("3")]);
       case "/api/v1/rules/3":
@@ -68,10 +74,23 @@ describe("Phase 1 Firefly reads", () => {
     expect(seenUrls).toContain("/api/v1/search/transactions?query=description_contains%3ASUPER&page=1&limit=5");
   });
 
-  it("lists categories, rules, gets a rule, and lists groups", async () => {
+  it("lists reusable metadata and accounts", async () => {
     await expect(service.listCategories({ page: 1, limit: 20 })).resolves.toMatchObject({
       categories: [{ id: "2", name: "Groceries" }],
     });
+    await expect(service.listBudgets({ page: 1, limit: 20 })).resolves.toMatchObject({
+      budgets: [{ id: "5", name: "Household", active: true }],
+    });
+    await expect(service.listTags({ page: 1, limit: 20 })).resolves.toMatchObject({
+      tags: [{ id: "6", name: "recurring" }],
+    });
+    await expect(service.listAccounts({ page: 1, limit: 20 })).resolves.toMatchObject({
+      accounts: [{ id: "7", name: "Checking", type: "asset", active: true }],
+    });
+    expect(seenUrls).toContain("/api/v1/accounts?type=all&page=1&limit=20");
+  });
+
+  it("lists rules, gets a rule, and lists groups", async () => {
     await expect(service.listRules({ page: 1, limit: 20 })).resolves.toMatchObject({
       rules: [{ id: "3", active: false, pending: false }],
     });
