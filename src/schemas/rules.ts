@@ -50,7 +50,19 @@ export const RULE_TRIGGER_TYPES = [
 
 export type RuleTriggerType = (typeof RULE_TRIGGER_TYPES)[number];
 export type RuleMoment = "store-journal" | "update-journal" | "manual-activation";
-export type AllowedRuleActionType = "set_category";
+export const ALLOWED_RULE_ACTION_TYPES = [
+  "set_category",
+  "set_budget",
+  "add_tag",
+  "remove_tag",
+  "set_description",
+  "set_notes",
+  "set_source_account",
+  "set_destination_account",
+  "convert_transfer",
+] as const;
+
+export type AllowedRuleActionType = (typeof ALLOWED_RULE_ACTION_TYPES)[number];
 
 export interface RuleTriggerInput {
   type: RuleTriggerType;

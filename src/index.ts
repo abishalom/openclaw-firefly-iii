@@ -3,7 +3,7 @@ import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 import { FireflyClient } from "./client.js";
 import { fireflyConfigSchema, type FireflyPluginConfig } from "./config.js";
 import { safeError } from "./errors.js";
-import { RULE_TRIGGER_TYPES } from "./schemas/rules.js";
+import { ALLOWED_RULE_ACTION_TYPES, RULE_TRIGGER_TYPES } from "./schemas/rules.js";
 import { FireflyService } from "./service.js";
 
 const Id = Type.String({ pattern: "^[1-9][0-9]*$", description: "Canonical non-zero Firefly numeric resource ID (no leading zeroes)." });
@@ -29,11 +29,11 @@ const RuleTrigger = Type.Object(
 );
 const RuleAction = Type.Object(
   {
-    type: Type.Literal("set_category"),
+    type: Type.Union(ALLOWED_RULE_ACTION_TYPES.map((value) => Type.Literal(value))),
     value: Type.String({
       minLength: 1,
-      maxLength: 1024,
-      description: "Exact name of an existing Firefly category.",
+      maxLength: 32_000,
+      description: "Action value. Named targets must exactly match an existing Firefly object; text actions use the supplied text.",
     }),
   },
   { additionalProperties: false },
@@ -54,7 +54,7 @@ async function safely<T>(operation: () => Promise<T>): Promise<T | { error: Retu
 export default defineToolPlugin({
   id: "openclaw-firefly",
   name: "Firefly III",
-  description: "Safely inspect Firefly III and manage inactive, OpenClaw-owned category rule proposals.",
+  description: "Safely inspect Firefly III and manage inactive, OpenClaw-owned rule proposals.",
   configSchema: fireflyConfigSchema,
   tools: (tool) => [
     tool({
@@ -115,6 +115,33 @@ export default defineToolPlugin({
         safely(() => service(config, context.api.logger).listCategories(params, context.signal)),
     }),
     tool({
+      name: "firefly_budgets_list",
+      label: "List Firefly budgets",
+      description: "List existing Firefly budgets so proposals can reuse exact names.",
+      parameters: Type.Object(
+        { page: Page, limit: Limit, start: Type.Optional(DateOnly), end: Type.Optional(DateOnly) },
+        { additionalProperties: false },
+      ),
+      execute: (params, config, context) =>
+        safely(() => service(config, context.api.logger).listBudgets(params, context.signal)),
+    }),
+    tool({
+      name: "firefly_tags_list",
+      label: "List Firefly tags",
+      description: "List existing Firefly tags so proposals can reuse exact names.",
+      parameters: Type.Object({ page: Page, limit: Limit }, { additionalProperties: false }),
+      execute: (params, config, context) =>
+        safely(() => service(config, context.api.logger).listTags(params, context.signal)),
+    }),
+    tool({
+      name: "firefly_accounts_list",
+      label: "List Firefly accounts",
+      description: "List existing Firefly accounts for source, destination, and transfer rule actions.",
+      parameters: Type.Object({ page: Page, limit: Limit }, { additionalProperties: false }),
+      execute: (params, config, context) =>
+        safely(() => service(config, context.api.logger).listAccounts(params, context.signal)),
+    }),
+    tool({
       name: "firefly_rules_list",
       label: "List Firefly rules",
       description: "List a bounded page of Firefly rules for duplicate and overlap checks.",
@@ -141,7 +168,7 @@ export default defineToolPlugin({
     tool({
       name: "firefly_rule_create_pending",
       label: "Create pending Firefly rule",
-      description: "Create an inactive, marked Firefly category rule proposal. Only set_category is allowed.",
+      description: "Create an inactive, marked Firefly rule proposal using only the curated metadata, text, account, and transfer-conversion actions.",
       parameters: Type.Object(
         {
           title: Type.String({ minLength: 1, maxLength: 100 }),
@@ -152,7 +179,7 @@ export default defineToolPlugin({
           stopProcessing: Type.Optional(Type.Boolean()),
           order: Type.Optional(Type.Integer({ minimum: 1, maximum: 2048 })),
           triggers: Type.Array(RuleTrigger, { minItems: 1, maxItems: 20 }),
-          actions: Type.Array(RuleAction, { minItems: 1, maxItems: 1 }),
+          actions: Type.Array(RuleAction, { minItems: 1, maxItems: 20 }),
         },
         { additionalProperties: false },
       ),
@@ -191,7 +218,7 @@ export default defineToolPlugin({
           stopProcessing: Type.Optional(Type.Boolean()),
           order: Type.Optional(Type.Integer({ minimum: 1, maximum: 2048 })),
           triggers: Type.Optional(Type.Array(RuleTrigger, { minItems: 1, maxItems: 20 })),
-          actions: Type.Optional(Type.Array(RuleAction, { minItems: 1, maxItems: 1 })),
+          actions: Type.Optional(Type.Array(RuleAction, { minItems: 1, maxItems: 20 })),
         },
         { additionalProperties: false },
       ),

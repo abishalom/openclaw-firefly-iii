@@ -29,6 +29,19 @@ Supported OpenClaw SecretRef sources are `env`, `file`, `exec`, and `store`:
 
 Do not put real token values in this repository, examples, shell history, or issue reports. If a SecretRef cannot be resolved, OpenClaw keeps this plugin capability cold; the plugin also rejects non-string unresolved values defensively.
 
+### Migrate an existing `.env` token to the shared secret store
+
+Run the first command interactively and paste the token into its masked prompt. Do not use `--value` for a secret:
+
+```sh
+openclaw secrets store set FIREFLY_ACCESS_TOKEN
+openclaw config set plugins.entries.openclaw-firefly.config.accessToken '{"source":"store","provider":"default","id":"FIREFLY_ACCESS_TOKEN"}' --strict-json
+openclaw secrets reload
+openclaw secrets audit --check
+```
+
+Verify one read-only Firefly tool call, then remove `FIREFLY_ACCESS_TOKEN` from the Gateway `.env` and run `openclaw secrets audit --check` again. The stored value is not available to ordinary agent shell commands; OpenClaw resolves it only for the declared plugin secret-input path.
+
 ## Base URL examples
 
 These normalize as follows:
@@ -50,4 +63,4 @@ Cloudflare Access or similar headers belong in static plugin configuration, neve
 
 ## Installation
 
-Build/package on a development machine or CI runner, then install the resulting package into the OpenClaw gateway using that gateway's normal plugin installation flow. A global OpenClaw installation is not required in this repository; npm scripts use the pinned local development dependency.
+Build/package on a development machine or CI runner, then install the resulting package into the OpenClaw gateway using that gateway's normal plugin installation flow. A global OpenClaw installation is not required in this repository; npm scripts use the pinned local development dependency. A path-installed checkout must run `npm ci && npm run build` after pulling because `dist/` is generated and intentionally not committed.

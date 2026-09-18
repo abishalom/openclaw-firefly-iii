@@ -5,6 +5,8 @@ import {
   createPendingDescription, parsePendingDescription, proposalDigest, updatePendingDescription,
 } from "./rule-safety.js";
 import { compileRulePreview } from "./rule-preview.js";
+import { normalizeAccountCollection } from "./schemas/accounts.js";
+import { normalizeBudgetCollection, normalizeTagCollection } from "./schemas/metadata.js";
 import { normalizeCategoryCollection, normalizeRuleCollection, normalizeRuleGroupCollection, normalizeRuleSingle, type NormalizedRule, type RuleActionInput, type RuleMoment, type RuleTriggerInput } from "./schemas/rules.js";
 import { normalizeTransactionCollection, normalizeTransactionSingle, type NormalizedTransactionGroup, type TransactionPage } from "./schemas/transactions.js";
 
@@ -12,6 +14,7 @@ export interface PageParams { page?: number; limit?: number; }
 export interface TransactionListParams extends PageParams { start?: string; end?: string; type?: string; }
 export interface TransactionSearchParams extends PageParams { query: string; }
 export interface CategoryListParams extends PageParams { start?: string; end?: string; }
+export interface BudgetListParams extends PageParams { start?: string; end?: string; }
 export interface RuleTestParams { id: string; start?: string; end?: string; accountIds?: string[]; maxResults?: number; }
 export interface RulePreviewResult extends TransactionPage {
   ruleId: string;
@@ -42,6 +45,9 @@ export class FireflyService {
   async getTransaction(id: string, signal?: AbortSignal) { return normalizeTransactionSingle(await this.client.get<unknown>(`/transactions/${resourceId(id)}`, withSignal(signal))); }
   async searchTransactions(params: TransactionSearchParams, signal?: AbortSignal) { return normalizeTransactionCollection(await this.client.get<unknown>("/search/transactions", { query: { query: params.query, page: params.page, limit: params.limit }, ...withSignal(signal) })); }
   async listCategories(params: CategoryListParams, signal?: AbortSignal) { return normalizeCategoryCollection(await this.client.get<unknown>("/categories", { query: { page: params.page, limit: params.limit, start: params.start, end: params.end }, ...withSignal(signal) })); }
+  async listBudgets(params: BudgetListParams, signal?: AbortSignal) { return normalizeBudgetCollection(await this.client.get<unknown>("/budgets", { query: { page: params.page, limit: params.limit, start: params.start, end: params.end }, ...withSignal(signal) })); }
+  async listTags(params: PageParams, signal?: AbortSignal) { return normalizeTagCollection(await this.client.get<unknown>("/tags", { query: { page: params.page, limit: params.limit }, ...withSignal(signal) })); }
+  async listAccounts(params: PageParams, signal?: AbortSignal) { return normalizeAccountCollection(await this.client.get<unknown>("/accounts", { query: { type: "all", page: params.page, limit: params.limit }, ...withSignal(signal) })); }
   async listRules(params: PageParams, signal?: AbortSignal) { return normalizeRuleCollection(await this.client.get<unknown>("/rules", { query: { page: params.page, limit: params.limit }, ...withSignal(signal) })); }
   async getRule(id: string, signal?: AbortSignal): Promise<NormalizedRule> { return normalizeRuleSingle(await this.client.get<unknown>(`/rules/${resourceId(id)}`, withSignal(signal))); }
   async listRuleGroups(params: PageParams, signal?: AbortSignal) { return normalizeRuleGroupCollection(await this.client.get<unknown>("/rule-groups", { query: { page: params.page, limit: params.limit }, ...withSignal(signal) })); }
@@ -140,7 +146,7 @@ export class FireflyService {
 
   async createPendingRule(input: CreatePendingRuleInput, signal?: AbortSignal): Promise<NormalizedRule> {
     validateRuleTitle(input.title); resourceId(input.ruleGroupId); assertAllowedTriggers(input.triggers); assertAllowedActions(input.actions);
-    await this.assertCategoriesExist(input.actions, signal);
+    await this.assertActionTargetsExist(input.actions, signal);
     const semantic = proposedRule(input);
     const provisional = createPendingDescription(input.description, proposalDigest(semantic, input.description?.trim() ?? ""));
     let rule = normalizeRuleSingle(await this.client.post<unknown>("/rules", snapshot(semantic, false, provisional), withSignal(signal)));
@@ -162,8 +168,8 @@ export class FireflyService {
       const existing = await this.getRule(id, signal); const marker = assertPendingRule(existing);
       assertAllowedActions(existing.actions); if (input.title !== undefined) validateRuleTitle(input.title);
       if (input.triggers !== undefined) assertAllowedTriggers(input.triggers); if (input.actions !== undefined) assertAllowedActions(input.actions);
-      const effectiveActions = input.actions ?? existing.actions.map((a) => ({ type: a.type as "set_category", value: a.value ?? "" }));
-      assertAllowedActions(effectiveActions); await this.assertCategoriesExist(effectiveActions, signal);
+      const effectiveActions = input.actions ?? existing.actions;
+      assertAllowedActions(effectiveActions); await this.assertActionTargetsExist(effectiveActions, signal);
       const candidate = mergeProposal(existing, input);
       const description = updatePendingDescription(marker, proposalDigest(candidate, input.description === undefined ? marker.userDescription : input.description.trim()), input.description);
       const response = normalizeRuleSingle(await this.client.put<unknown>(`/rules/${id}`, snapshot(candidate, false, description), withSignal(signal)));
@@ -177,7 +183,7 @@ export class FireflyService {
       const existing = await this.getRule(id, signal); const marker = assertPendingRule(existing);
       if (marker.proposalDigest !== expectedProposalDigest) throw new FireflyError("FIREFLY_RULE_NOT_PENDING", "The reviewed proposal digest no longer matches this rule.");
       assertAllowedActions(existing.actions); assertAllowedTriggers(existing.triggers);
-      await this.assertCategoriesExist(existing.actions.map((a) => ({ type: a.type as "set_category", value: a.value ?? "" })), signal);
+      await this.assertActionTargetsExist(existing.actions, signal);
       const inactive = normalizeRuleSingle(await this.client.put<unknown>(`/rules/${id}`, snapshot(existing, false, existing.description ?? ""), withSignal(signal)));
       const verifiedMarker = assertPendingRule(inactive);
       if (verifiedMarker.proposalDigest !== expectedProposalDigest) throw new FireflyError("FIREFLY_RULE_NOT_PENDING", "Firefly did not preserve the reviewed proposal.");
@@ -306,11 +312,37 @@ export class FireflyService {
     }
     throw new FireflyError("FIREFLY_INVALID_RESPONSE", "Firefly did not stabilize the inactive proposal semantics while re-signing it.");
   }
-  private async assertCategoriesExist(actions: readonly { type: string; value: string | null }[], signal?: AbortSignal): Promise<void> {
-    const requested = new Set(actions.map((a) => a.value).filter((v): v is string => Boolean(v)));
-    const existing = new Set((await this.listCategories({ page: 1, limit: 65_536 }, signal)).categories.map((c) => c.name));
-    const missing = [...requested].filter((name) => !existing.has(name));
-    if (missing.length) throw new FireflyError("FIREFLY_RULE_UNSAFE", `Category ${JSON.stringify(missing[0])} does not exist in Firefly.`);
+  private async assertActionTargetsExist(actions: readonly { type: string; value: string | null }[], signal?: AbortSignal): Promise<void> {
+    const categories = actions.filter((action) => action.type === "set_category").map((action) => action.value).filter((value): value is string => value !== null);
+    if (categories.length > 0) {
+      const existing = new Set((await this.listCategories({ page: 1, limit: 65_536 }, signal)).categories.map((category) => category.name));
+      const missing = categories.find((name) => !existing.has(name));
+      if (missing !== undefined) throw new FireflyError("FIREFLY_RULE_UNSAFE", `Category ${JSON.stringify(missing)} does not exist in Firefly.`);
+    }
+
+    const budgets = actions.filter((action) => action.type === "set_budget").map((action) => action.value).filter((value): value is string => value !== null);
+    if (budgets.length > 0) {
+      const existing = new Set((await this.listBudgets({ page: 1, limit: 65_536 }, signal)).budgets.filter((budget) => budget.active).map((budget) => budget.name));
+      const missing = budgets.find((name) => !existing.has(name));
+      if (missing !== undefined) throw new FireflyError("FIREFLY_RULE_UNSAFE", `Active budget ${JSON.stringify(missing)} does not exist in Firefly.`);
+    }
+
+    const tags = actions.filter((action) => action.type === "add_tag" || action.type === "remove_tag").map((action) => action.value).filter((value): value is string => value !== null);
+    if (tags.length > 0) {
+      const existing = new Set((await this.listTags({ page: 1, limit: 65_536 }, signal)).tags.map((tag) => tag.name));
+      const missing = tags.find((name) => !existing.has(name));
+      if (missing !== undefined) throw new FireflyError("FIREFLY_RULE_UNSAFE", `Tag ${JSON.stringify(missing)} does not exist in Firefly.`);
+    }
+
+    const accountNames = actions.filter((action) => action.type === "set_source_account" || action.type === "set_destination_account" || action.type === "convert_transfer").map((action) => action.value).filter((value): value is string => value !== null);
+    if (accountNames.length > 0) {
+      const accounts = (await this.listAccounts({ page: 1, limit: 65_536 }, signal)).accounts.filter((account) => account.active);
+      for (const name of accountNames) {
+        const matches = accounts.filter((account) => account.name === name);
+        if (matches.length === 0) throw new FireflyError("FIREFLY_RULE_UNSAFE", `Active account ${JSON.stringify(name)} does not exist in Firefly.`);
+        if (matches.length > 1) throw new FireflyError("FIREFLY_RULE_UNSAFE", `Account name ${JSON.stringify(name)} is ambiguous in Firefly.`);
+      }
+    }
   }
 }
 function proposedRule(input: CreatePendingRuleInput): Omit<NormalizedRule, "id" | "description" | "ruleGroupTitle" | "createdAt" | "updatedAt" | "pending" | "pendingExpiresAt" | "proposalDigest"> { return { title: input.title, ruleGroupId: resourceId(input.ruleGroupId), order: input.order ?? 1, trigger: input.trigger ?? "store-journal", active: false, strict: input.strict ?? true, stopProcessing: input.stopProcessing ?? false, triggers: input.triggers.map((x, i) => ({ type: x.type, value: x.value, prohibited: x.prohibited ?? false, active: true, stopProcessing: false, order: i + 1 })), actions: input.actions.map((x, i) => ({ type: x.type, value: x.value, active: true, stopProcessing: false, order: i + 1 })) }; }
