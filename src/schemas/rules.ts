@@ -1,4 +1,5 @@
 import { invalidResponse } from "../errors.js";
+import { parsePendingDescription, semanticDigest } from "../rule-semantic-digest.js";
 import {
   asBoolean,
   asNumber,
@@ -179,11 +180,6 @@ export interface RuleGroupPage {
   pagination: Pagination;
 }
 
-export interface PendingMarkerView {
-  expiresAt: string;
-  proposalDigest: string;
-}
-
 export function normalizeRuleCollection(value: unknown): RulePage {
   const collection = parseCollection(value);
   return {
@@ -258,23 +254,24 @@ function normalizeRuleResource(value: unknown): NormalizedRule {
   // response layer so re-PUTs do not turn & into &amp;amp; and marker text is stable.
   const rawDescription = asString(attributes.description);
   const description = rawDescription === null ? null : decodeFireflyDescription(rawDescription);
-  const marker = description === null ? null : readMarkerView(description);
+  const marker = parsePendingDescription(description);
+  const order = asNumber(attributes.order);
+  const active = asBoolean(attributes.active) ?? false;
+  const strict = asBoolean(attributes.strict) ?? true;
+  const stopProcessing = asBoolean(attributes.stop_processing) ?? false;
+  const triggers = attributes.triggers.map((item) => normalizeTrigger(item));
+  const actions = attributes.actions.map((item) => normalizeAction(item));
+  // `proposalDigest` reports marker presence; `pending` is reserved for a
+  // marker whose visible rule semantics verify, not merely one that exists.
+  const pending = marker !== null && !active && marker.proposalDigest === semanticDigest(
+    { title, ruleGroupId, order, trigger, strict, stopProcessing, triggers, actions },
+    marker.userDescription,
+  );
   return {
-    id: value.id,
-    title,
-    description,
-    ruleGroupId,
-    ruleGroupTitle: asString(attributes.rule_group_title),
-    trigger,
-    order: asNumber(attributes.order),
-    active: asBoolean(attributes.active) ?? false,
-    strict: asBoolean(attributes.strict) ?? true,
-    stopProcessing: asBoolean(attributes.stop_processing) ?? false,
-    createdAt: asString(attributes.created_at),
-    updatedAt: asString(attributes.updated_at),
-    triggers: attributes.triggers.map((item) => normalizeTrigger(item)),
-    actions: attributes.actions.map((item) => normalizeAction(item)),
-    pending: marker !== null && !(asBoolean(attributes.active) ?? false),
+    id: value.id, title, description, ruleGroupId,
+    ruleGroupTitle: asString(attributes.rule_group_title), trigger, order, active, strict, stopProcessing,
+    createdAt: asString(attributes.created_at), updatedAt: asString(attributes.updated_at), triggers, actions,
+    pending,
     pendingExpiresAt: marker?.expiresAt ?? null,
     proposalDigest: marker?.proposalDigest ?? null,
   };
@@ -307,9 +304,4 @@ function decodeFireflyDescription(value: string): string {
     const key = entity.toLowerCase();
     return key === "&amp;" ? "&" : key === "&lt;" ? "<" : key === "&gt;" ? ">" : key === "&quot;" ? "\"" : "'";
   });
-}
-
-function readMarkerView(description: string): PendingMarkerView | null {
-  const match = /^\[openclaw-firefly:pending:v1;proposal=[0-9a-f-]{36};digest=([0-9a-f]{64});created=[^;\]]+;expires=([^\]]+)\](?:\n|$)/u.exec(description);
-  return match?.[1] && match[2] ? { proposalDigest: match[1], expiresAt: match[2] } : null;
 }

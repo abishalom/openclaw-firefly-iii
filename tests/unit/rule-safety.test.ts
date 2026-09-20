@@ -50,6 +50,25 @@ describe("pending rule safety", () => {
       expiresAt: marker?.expiresAt,
       userDescription: "Revised note",
     });
+    expect(parsePendingDescription(description!.replace("proposal=123e4567-e89b-42d3-a456-426614174000", "proposal=------------------------------------"))).toBeNull();
+    expect(parsePendingDescription(description!.replace("created=2026-09-17T12:00:00.000Z", "created=not-a-date"))).toBeNull();
+  });
+
+  it("ignores hidden-trigger numeric gaps but preserves sequence and values", () => {
+    const original = rule({
+      triggers: [
+        { type: "description_contains", value: "MARKET", prohibited: false, active: true, stopProcessing: false, order: 1 },
+        { type: "has_no_category", value: "true", prohibited: false, active: true, stopProcessing: false, order: 3 },
+      ],
+      actions: [
+        { type: "set_category", value: "Groceries", active: true, stopProcessing: false, order: 1 },
+        { type: "add_tag", value: "reviewed", active: true, stopProcessing: false, order: 4 },
+      ],
+    });
+    const digest = proposalDigest(original, "User note");
+    expect(proposalDigest({ ...original, triggers: original.triggers.map((trigger, index) => ({ ...trigger, order: index + 7 })), actions: original.actions.map((action, index) => ({ ...action, order: index + 9 })) }, "User note")).toBe(digest);
+    expect(proposalDigest({ ...original, triggers: [...original.triggers].reverse() }, "User note")).not.toBe(digest);
+    expect(proposalDigest({ ...original, actions: [{ ...original.actions[0]!, value: "Dining" }, original.actions[1]!] }, "User note")).not.toBe(digest);
   });
 
   it("refuses ordinary and active rules", () => {

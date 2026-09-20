@@ -64,7 +64,7 @@ Confirmed required fields: `title`, `rule_group_id` (or source-supported title a
 
 ### `RuleUpdate`
 
-All fields are optional and partial updates are supported. The plugin sends complete snake_case snapshots (including top-level `order`/`stop_processing` and active trigger/action entries) for pending updates and confirmation's inactive verification write. After verifying that response against the reviewed digest, the final activation is a minimal partial update containing only `active` and the confirmed description marker.
+All fields are optional and partial updates are supported. The plugin sends complete snake_case snapshots (including top-level `order`/`stop_processing` and active trigger/action entries) for pending updates. Confirmation verifies the reviewed inactive rule by GET, activates with a minimal partial update containing only `active` and the confirmed description marker, then validates the persisted rule with an authoritative GET. Its rollback deactivates only an activation it can still identify as its own, deliberately preserving concurrent semantic edits.
 
 ### Rule enums
 

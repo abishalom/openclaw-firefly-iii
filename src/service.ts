@@ -38,14 +38,17 @@ export interface UpdatePendingRuleInput { id: string; title?: string; descriptio
 
 // Shared by all service instances in this Gateway process. Firefly v6.7.2 offers no CAS.
 const ruleLocks = new Map<string, Promise<void>>();
-async function withRuleLock<T>(id: string, operation: () => Promise<T>): Promise<T> {
-  const previous = ruleLocks.get(id) ?? Promise.resolve();
+const groupLocks = new Map<string, Promise<void>>();
+async function withLock<T>(locks: Map<string, Promise<void>>, id: string, operation: () => Promise<T>): Promise<T> {
+  const previous = locks.get(id) ?? Promise.resolve();
   let release!: () => void;
   const current = new Promise<void>((resolve) => { release = resolve; });
-  ruleLocks.set(id, current);
+  locks.set(id, current);
   await previous;
-  try { return await operation(); } finally { release(); if (ruleLocks.get(id) === current) ruleLocks.delete(id); }
+  try { return await operation(); } finally { release(); if (locks.get(id) === current) locks.delete(id); }
 }
+function withRuleLock<T>(id: string, operation: () => Promise<T>): Promise<T> { return withLock(ruleLocks, id, operation); }
+function withGroupLock<T>(id: string, operation: () => Promise<T>): Promise<T> { return withLock(groupLocks, id, operation); }
 
 export class FireflyService {
   constructor(private readonly client: FireflyClient, private readonly allowBestEffortPendingRuleDeletion = false) {}
@@ -238,18 +241,22 @@ export class FireflyService {
   async createPendingRule(input: CreatePendingRuleInput, signal?: AbortSignal): Promise<NormalizedRule> {
     validateRuleTitle(input.title); resourceId(input.ruleGroupId); assertAllowedTriggers(input.triggers); assertAllowedActions(input.actions);
     await this.assertActionTargetsExist(input.actions, signal);
-    const semantic = proposedRule(input);
-    const provisional = createPendingDescription(input.description, proposalDigest(semantic, input.description?.trim() ?? ""));
-    let rule = normalizeRuleSingle(await this.client.post<unknown>("/rules", snapshot(semantic, false, provisional), withSignal(signal)));
-    try {
-      if (rule.active) rule = normalizeRuleSingle(await this.client.put<unknown>(`/rules/${resourceId(rule.id)}`, { active: false, description: rule.description ?? "" }, withSignal(signal)));
-      return await this.resignPendingRule(rule, signal);
-    } catch (error) {
-      // Keep failed creations inactive. Deletion remains subject to the explicit
-      // best-effort deletion policy because Firefly has no conditional DELETE.
-      await this.cleanupFailedCreation(rule);
-      throw error;
-    }
+    return withGroupLock(resourceId(input.ruleGroupId), async () => {
+      const order = input.order ?? await this.nextRuleOrder(resourceId(input.ruleGroupId), signal);
+      const semantic = proposedRule({ ...input, order });
+      const provisional = createPendingDescription(input.description, proposalDigest(semantic, input.description?.trim() ?? ""));
+      let rule = normalizeRuleSingle(await this.client.post<unknown>("/rules", snapshot(semantic, false, provisional), withSignal(signal)));
+      try {
+        if (rule.active) rule = normalizeRuleSingle(await this.client.put<unknown>(`/rules/${resourceId(rule.id)}`, { active: false, description: rule.description ?? "" }, withSignal(signal)));
+        return await this.resignPendingRule(rule, signal);
+      } catch (error) {
+        // Keep failed creations inactive. Deletion remains subject to the explicit
+        // best-effort deletion policy because Firefly has no conditional DELETE.
+        await this.cleanupFailedCreation(rule);
+        const code = error instanceof FireflyError ? error.code : "FIREFLY_INVALID_RESPONSE";
+        throw new FireflyError(code, `Pending rule ${rule.id} creation failed; inspect that rule before retrying.`, undefined, { cause: error });
+      }
+    });
   }
 
   async updatePendingRule(input: UpdatePendingRuleInput, signal?: AbortSignal): Promise<NormalizedRule> {
@@ -275,23 +282,22 @@ export class FireflyService {
       if (marker.proposalDigest !== expectedProposalDigest) throw new FireflyError("FIREFLY_RULE_NOT_PENDING", "The reviewed proposal digest no longer matches this rule.");
       assertAllowedActions(existing.actions); assertAllowedTriggers(existing.triggers);
       await this.assertActionTargetsExist(existing.actions, signal);
-      const inactive = normalizeRuleSingle(await this.client.put<unknown>(`/rules/${id}`, snapshot(existing, false, existing.description ?? ""), withSignal(signal)));
-      const verifiedMarker = assertPendingRule(inactive);
-      if (verifiedMarker.proposalDigest !== expectedProposalDigest) throw new FireflyError("FIREFLY_RULE_NOT_PENDING", "Firefly did not preserve the reviewed proposal.");
-      const confirmedDescription = createConfirmedDescription(verifiedMarker);
+      // The initial GET is the reviewed integrity check. Do not rewrite its full
+      // snapshot: Firefly replaces visible triggers on such PUTs.
+      const confirmedDescription = createConfirmedDescription(marker);
       try {
-        const rule = normalizeRuleSingle(
-          await this.client.put<unknown>(
-            `/rules/${id}`,
-            { active: true, description: confirmedDescription },
-            withSignal(signal),
-          ),
+        await this.client.put<unknown>(
+          `/rules/${id}`,
+          { active: true, description: confirmedDescription },
+          withSignal(signal),
         );
+        // PUT responses are not authoritative for Firefly's group-wide
+        // normalization. Verify the persisted resource instead.
+        const rule = await this.getRule(id, signal);
         if (
           !rule.active ||
           rule.description !== confirmedDescription ||
-          parsePendingDescription(rule.description) !== null ||
-          proposalDigest(rule, verifiedMarker.userDescription) !== expectedProposalDigest
+          proposalDigest(rule, marker.userDescription) !== expectedProposalDigest
         ) {
           throw new FireflyError(
             "FIREFLY_INVALID_RESPONSE",
@@ -302,8 +308,8 @@ export class FireflyService {
       } catch (error) {
         const recovered = await this.restorePendingAfterActivationFailure(
           id,
-          inactive,
-          verifiedMarker,
+          existing,
+          marker,
           confirmedDescription,
         );
         if (!recovered) {
@@ -325,13 +331,13 @@ export class FireflyService {
     return withRuleLock(id, async () => { assertPendingRule(await this.getRule(id, signal)); await this.client.delete(`/rules/${id}`, withSignal(signal)); return { id, rejected: true }; });
   }
 
-  private async cleanupFailedCreation(rule: NormalizedRule, signal?: AbortSignal): Promise<void> {
+  private async cleanupFailedCreation(rule: NormalizedRule): Promise<void> {
     const id = resourceId(rule.id);
     const createdMarker = parsePendingDescription(rule.description);
     if (createdMarker === null) return;
     await withRuleLock(id, async () => {
       try {
-        let current = await this.getRule(id, signal);
+        let current = await this.getRule(id);
         const marker = parsePendingDescription(current.description);
         if (marker?.proposalId !== createdMarker.proposalId) return;
         if (current.active) {
@@ -339,7 +345,7 @@ export class FireflyService {
             await this.client.put<unknown>(
               `/rules/${id}`,
               { active: false, description: current.description ?? "" },
-              withSignal(signal),
+              undefined,
             ),
           );
         }
@@ -349,7 +355,7 @@ export class FireflyService {
           !current.active &&
           inactiveMarker?.proposalId === createdMarker.proposalId
         ) {
-          await this.client.delete(`/rules/${id}`, withSignal(signal));
+          await this.client.delete(`/rules/${id}`);
         }
       } catch {
         // Preserve the original creation error. The rule may require operator inspection.
@@ -367,18 +373,21 @@ export class FireflyService {
     try {
       const current = await this.getRule(id, signal);
       const currentPendingMarker = parsePendingDescription(current.description);
-      const stillOwned = current.description === confirmedDescription || (
-        currentPendingMarker?.proposalId === marker.proposalId &&
-        currentPendingMarker.proposalDigest === marker.proposalDigest
+      if (!current.active && currentPendingMarker?.proposalId === marker.proposalId && currentPendingMarker.proposalDigest === marker.proposalDigest) {
+        // A matching marker alone is not proof of rollback: its semantics may
+        // have changed while activation was in flight.
+        assertPendingRule(current);
+        return true;
+      }
+      // Only undo an activation we can still identify as ours. Do not restore a
+      // full snapshot, which could overwrite concurrent semantic edits.
+      if (!current.active || current.description !== confirmedDescription) return false;
+      await this.client.put<unknown>(
+        `/rules/${id}`,
+        { active: false, description: inactive.description ?? "" },
+        withSignal(signal),
       );
-      if (!stillOwned) return false;
-      const restored = normalizeRuleSingle(
-        await this.client.put<unknown>(
-          `/rules/${id}`,
-          snapshot(inactive, false, inactive.description ?? ""),
-          withSignal(signal),
-        ),
-      );
+      const restored = await this.getRule(id, signal);
       const restoredMarker = assertPendingRule(restored);
       return restoredMarker.proposalId === marker.proposalId &&
         restoredMarker.proposalDigest === marker.proposalDigest;
@@ -391,7 +400,7 @@ export class FireflyService {
   private async resignPendingRule(rule: NormalizedRule, signal?: AbortSignal): Promise<NormalizedRule> {
     // A description-only PUT can itself cause Firefly to reset order. Re-read its
     // semantics and converge on the response, never on assumptions about its mutators.
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (let attempt = 0; attempt <= 3; attempt += 1) {
       const marker = parsePendingDescription(rule.description);
       if (marker === null || rule.active) throw new FireflyError("FIREFLY_INVALID_RESPONSE", "Firefly did not return an inactive pending-rule description.");
       const description = updatePendingDescription(marker, proposalDigest(rule, marker.userDescription));
@@ -399,9 +408,26 @@ export class FireflyService {
         assertPendingRule(rule); assertAllowedActions(rule.actions); assertAllowedTriggers(rule.triggers);
         return rule;
       }
+      if (attempt === 3) break;
       rule = normalizeRuleSingle(await this.client.put<unknown>(`/rules/${resourceId(rule.id)}`, { active: false, description }, withSignal(signal)));
     }
     throw new FireflyError("FIREFLY_INVALID_RESPONSE", "Firefly did not stabilize the inactive proposal semantics while re-signing it.");
+  }
+  private async nextRuleOrder(ruleGroupId: string, signal?: AbortSignal): Promise<number> {
+    const limit = 100;
+    let page = 1;
+    let highest = 0;
+    for (;;) {
+      const result = await this.listRules({ page, limit }, signal);
+      highest = result.rules
+        .filter((rule) => rule.ruleGroupId === ruleGroupId)
+        .reduce((max, rule) => Math.max(max, rule.order ?? 0), highest);
+      const { totalPages } = result.pagination;
+      // `currentPage` normalizes to 1 when Firefly omits it, so advance the
+      // requested page rather than trusting the fallback value.
+      if (totalPages !== null ? page >= totalPages : result.rules.length < limit) return highest + 1;
+      page += 1;
+    }
   }
   private async assertActionTargetsExist(actions: readonly { type: string; value: string | null }[], signal?: AbortSignal): Promise<void> {
     const categories = actions.filter((action) => action.type === "set_category").map((action) => action.value).filter((value): value is string => value !== null);

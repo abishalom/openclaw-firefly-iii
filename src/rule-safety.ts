@@ -1,5 +1,6 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { FireflyError } from "./errors.js";
+import { parsePendingDescription, semanticDigest as proposalDigest, type PendingMarker } from "./rule-semantic-digest.js";
 import {
   ALLOWED_RULE_ACTION_TYPES,
   RULE_TRIGGER_TYPES,
@@ -8,35 +9,14 @@ import {
   type RuleTriggerInput,
 } from "./schemas/rules.js";
 
-const PENDING_MARKER =
-  /^\[openclaw-firefly:pending:v1;proposal=([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12});digest=([0-9a-f]{64});created=([^;\]]+);expires=([^\]]+)\](?:\n|$)/u;
 export const PENDING_TTL_MS = 24 * 60 * 60 * 1_000;
 
-export interface PendingMarker { proposalId: string; proposalDigest: string; createdAt: string; expiresAt: string; userDescription: string; }
-
-export function proposalDigest(rule: Pick<NormalizedRule, "title" | "ruleGroupId" | "order" | "trigger" | "strict" | "stopProcessing" | "triggers" | "actions">, userDescription: string): string {
-  // Explicit property order makes this stable across runtimes; arrays retain Firefly execution order.
-  const semantic = {
-    title: rule.title, ruleGroupId: rule.ruleGroupId, order: rule.order,
-    trigger: rule.trigger, strict: rule.strict, stopProcessing: rule.stopProcessing,
-    triggers: rule.triggers.map(({ type, value, prohibited, active, stopProcessing, order }) => ({ type, value, prohibited, active, stopProcessing, order })),
-    actions: rule.actions.map(({ type, value, active, stopProcessing, order }) => ({ type, value, active, stopProcessing, order })),
-    userDescription,
-  };
-  return createHash("sha256").update(JSON.stringify(semantic)).digest("hex");
-}
+export { parsePendingDescription, proposalDigest, type PendingMarker };
 
 export function createPendingDescription(userDescription: string | undefined, digest: string, now = new Date(), proposalId = randomUUID()): string {
   const createdAt = now.toISOString();
   const expiresAt = new Date(now.getTime() + PENDING_TTL_MS).toISOString();
   return pendingDescription({ proposalId, proposalDigest: digest, createdAt, expiresAt, userDescription: "" }, userDescription?.trim() ?? "");
-}
-
-export function parsePendingDescription(description: string | null): PendingMarker | null {
-  if (description === null) return null;
-  const match = PENDING_MARKER.exec(description);
-  if (!match?.[1] || !match[2] || !match[3] || !match[4] || !isIsoDate(match[3]) || !isIsoDate(match[4])) return null;
-  return { proposalId: match[1], proposalDigest: match[2], createdAt: match[3], expiresAt: match[4], userDescription: description.slice(match[0].length) };
 }
 
 export function updatePendingDescription(marker: PendingMarker, digest: string, userDescription?: string): string {
@@ -108,4 +88,3 @@ export function assertAllowedTriggers(triggers: readonly RuleTriggerInput[] | No
     if (!allowed.has(trigger.type) || typeof trigger.value !== "string" || trigger.value.trim() === "" || trigger.value.length > 1024 || ("active" in trigger && trigger.active !== true)) throw new FireflyError("FIREFLY_RULE_UNSAFE", `Rule trigger ${JSON.stringify(trigger.type)} is not supported by the verified API contract.`);
   }
 }
-function isIsoDate(value: string): boolean { const date = new Date(value); return Number.isFinite(date.getTime()) && date.toISOString() === value; }

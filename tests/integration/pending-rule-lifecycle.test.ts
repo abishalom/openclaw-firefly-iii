@@ -27,6 +27,11 @@ let nextId: number;
 let confirmPayload: Record<string, unknown> | undefined;
 let corruptActivation: boolean;
 let failResignPut: boolean;
+let hiddenTriggerNormalizesOrders: boolean;
+let resignTitleMutationsRemaining: number;
+let preserveRuleOrders: boolean;
+let createReturnsActive: boolean;
+let abortOnRulePut: (() => void) | undefined;
 let triggerFailure: number | undefined;
 let triggerDelay = false;
 let triggerResponse: "json" | "empty-200" | undefined;
@@ -39,6 +44,11 @@ beforeEach(async () => {
   confirmPayload = undefined;
   corruptActivation = false;
   failResignPut = false;
+  hiddenTriggerNormalizesOrders = false;
+  resignTitleMutationsRemaining = -1;
+  preserveRuleOrders = false;
+  createReturnsActive = false;
+  abortOnRulePut = undefined;
   triggerFailure = undefined;
   triggerDelay = false;
   triggerResponse = undefined;
@@ -226,6 +236,48 @@ describe("pending rule lifecycle", () => {
     expect(stopped.transactions.map((transaction) => transaction.id)).toEqual(["501"]);
   });
 
+  it("accepts convergence in the final permitted re-sign response", async () => {
+    resignTitleMutationsRemaining = 2;
+    const pending = await service.createPendingRule({
+      title: "Final re-sign response",
+      ruleGroupId: "7",
+      triggers: [{ type: "description_contains", value: "SAFE" }],
+      actions: [{ type: "set_category", value: "Groceries" }],
+    });
+    expect(pending.pending).toBe(true);
+    expect(requests.filter((request) => request.method === "PUT" && request.path.endsWith(`/${pending.id}`))).toHaveLength(3);
+  });
+
+  it("confirms hidden-trigger-normalized drafts from authoritative GET readback without a snapshot PUT", async () => {
+    hiddenTriggerNormalizesOrders = true;
+    const pending = await service.createPendingRule({
+      title: "Hidden trigger orders",
+      ruleGroupId: "7",
+      triggers: [
+        { type: "description_contains", value: "SAFE" },
+        { type: "has_no_category", value: "true" },
+      ],
+      actions: [{ type: "set_category", value: "Groceries" }],
+    });
+    const before = requests.length;
+    await expect(service.confirmPendingRule(pending.id, pending.proposalDigest!)).resolves.toMatchObject({ active: true });
+    const confirmRequests = requests.slice(before);
+    expect(confirmRequests.filter((request) => request.method === "PUT")).toHaveLength(1);
+    expect(confirmRequests.filter((request) => request.method === "GET" && request.path.endsWith(`/${pending.id}`)).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("appends concurrent default-position drafts in the same group without invalidating the first", async () => {
+    preserveRuleOrders = true;
+    const create = (title: string) => service.createPendingRule({
+      title, ruleGroupId: "7",
+      triggers: [{ type: "description_contains", value: title }],
+      actions: [{ type: "set_category", value: "Groceries" }],
+    });
+    const [first, second] = await Promise.all([create("Append first"), create("Append second")]);
+    expect([first.order, second.order].sort()).toEqual([1, 2]);
+    await expect(service.confirmPendingRule(first.id, first.proposalDigest!)).resolves.toMatchObject({ active: true });
+  });
+
   it("rolls a semantically mismatched activation back to the reviewed inactive proposal", async () => {
     const pending = await service.createPendingRule({
       title: "Rollback activation",
@@ -236,13 +288,28 @@ describe("pending rule lifecycle", () => {
     corruptActivation = true;
     await expect(
       service.confirmPendingRule(pending.id, pending.proposalDigest!),
-    ).rejects.toMatchObject({ code: "FIREFLY_INVALID_RESPONSE" });
+    ).rejects.toMatchObject({ code: "FIREFLY_ACTIVATION_UNCERTAIN" });
 
     const stored = await service.getRule(pending.id);
     expect(stored.active).toBe(false);
-    expect(stored.pending).toBe(true);
-    expect(stored.triggers[0]?.value).toBe("SAFE");
+    // The marker was restored but the semantic edit was not overwritten.
+    expect(stored.pending).toBe(false);
+    expect(stored.triggers[0]?.value).toBe("UNREVIEWED");
     expect(stored.proposalDigest).toBe(pending.proposalDigest);
+  });
+
+  it("cleans up an active creation after caller cancellation", async () => {
+    const safeService = new FireflyService(client);
+    const controller = new AbortController();
+    createReturnsActive = true;
+    abortOnRulePut = () => controller.abort();
+    await expect(safeService.createPendingRule({
+      title: "Cancelled active creation", ruleGroupId: "7",
+      triggers: [{ type: "description_contains", value: "CANCEL" }],
+      actions: [{ type: "set_category", value: "Groceries" }],
+    }, controller.signal)).rejects.toMatchObject({ code: "FIREFLY_CANCELLED" });
+    expect([...rules.values()]).toHaveLength(1);
+    expect([...rules.values()][0]?.active).toBe(false);
   });
 
   it("does not delete a failed creation when best-effort deletion is disabled", async () => {
@@ -427,10 +494,15 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     if (query.includes('description_contains:"SUPER 99"')) return collection(response, candidates);
     return collection(response, []);
   }
+  if (request.method === "GET" && url.pathname === "/api/v1/rules") {
+    return collection(response, [...rules.values()].map((state) => resource("rules", state.id, state)));
+  }
   if (request.method === "POST" && url.pathname === "/api/v1/rules") {
     const body = await readBody(request);
     const id = String(nextId++);
     const state = stateFromBody(id, body);
+    if (createReturnsActive) state.active = true;
+    if (resignTitleMutationsRemaining >= 0) state.title += " canonical";
     rules.set(id, state);
     return json(response, 200, singleRule(state));
   }
@@ -462,6 +534,12 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     }
     if (request.method === "PUT") {
       const body = await readBody(request);
+      if (abortOnRulePut !== undefined) {
+        const abort = abortOnRulePut;
+        abortOnRulePut = undefined;
+        abort();
+        return;
+      }
       if (
         failResignPut &&
         body.active === false &&
@@ -472,6 +550,16 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       }
       if (body.active === true) confirmPayload = body;
       const updated = stateFromBody(id, body, state);
+      if (resignTitleMutationsRemaining > 0 && body.active === false && Object.keys(body).sort().join(",") === "active,description") {
+        updated.title += " canonical";
+        resignTitleMutationsRemaining -= 1;
+      }
+      if (hiddenTriggerNormalizesOrders) {
+        // v6.7.2's invisible user_action participates in numbering, leaving a
+        // harmless gap in the visible API array after any rule update.
+        updated.triggers.forEach((trigger, index) => { trigger.order = index < 1 ? 1 : index + 2; });
+        updated.actions.forEach((action, index) => { action.order = index + 3; });
+      }
       if (body.active === true && corruptActivation) {
         corruptActivation = false;
         const firstTrigger = updated.triggers[0];
@@ -504,7 +592,7 @@ function stateFromBody(id: string, body: Record<string, unknown>, previous?: Rul
 
     rule_group_title: previous?.rule_group_title ?? "Default",
     trigger: body.trigger === undefined ? previous?.trigger ?? "store-journal" : String(body.trigger),
-    order: body.order === undefined ? previous?.order ?? 1 : Math.min(Number(body.order), 1),
+    order: body.order === undefined ? previous?.order ?? 1 : preserveRuleOrders ? Number(body.order) : Math.min(Number(body.order), 1),
     active: body.active === undefined ? previous?.active ?? false : body.active === true,
     strict: body.strict === undefined ? previous?.strict ?? true : body.strict !== false,
     stop_processing: body.stop_processing === undefined ? previous?.stop_processing ?? false : body.stop_processing === true,
