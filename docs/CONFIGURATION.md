@@ -59,7 +59,7 @@ Cloudflare Access or similar headers belong in static plugin configuration, neve
 
 ## Live v6.7.2 integration profile
 
-`tests/integration/firefly-v672-live.test.ts` is skipped unless `FIREFLY_LIVE_ALLOW_DESTRUCTIVE=1` and all of `FIREFLY_LIVE_BASE_URL`, `FIREFLY_LIVE_ACCESS_TOKEN`, `FIREFLY_LIVE_CATEGORY`, and `FIREFLY_LIVE_RULE_GROUP_ID` are set. It requires `/about` to report exactly `6.7.2`; use a disposable server and token only. The test creates, activates, rejects, and directly deletes rules during teardown.
+`tests/integration/firefly-v672-live.test.ts` is skipped unless `FIREFLY_LIVE_ALLOW_DESTRUCTIVE=1` and all of `FIREFLY_LIVE_BASE_URL`, `FIREFLY_LIVE_ACCESS_TOKEN`, `FIREFLY_LIVE_CATEGORY`, and `FIREFLY_LIVE_RULE_GROUP_ID` are set. It requires `/about` to report exactly `6.7.2`; use a disposable server and token only. The test creates, activates, rejects, and directly deletes rules during teardown. It does not currently cover direct account/category/tag creation or historical trigger execution; mocked integration coverage exercises those contracts, not a live Firefly deployment.
 
 ## Installation
 

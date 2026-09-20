@@ -13,6 +13,9 @@ const DateOnly = Type.String({
 });
 const Page = Type.Optional(Type.Integer({ minimum: 1, maximum: 65_536 }));
 const Limit = Type.Optional(Type.Integer({ minimum: 1, maximum: 100 }));
+const CreationName = Type.String({ minLength: 1, maxLength: 1024 });
+const CategoryName = Type.String({ minLength: 1, maxLength: 100 });
+const Notes = Type.Optional(Type.String({ maxLength: 32_000 }));
 const RuleMoment = Type.Union([
   Type.Literal("store-journal"),
   Type.Literal("update-journal"),
@@ -106,13 +109,27 @@ export default defineToolPlugin({
     tool({
       name: "firefly_categories_list",
       label: "List Firefly categories",
-      description: "List existing Firefly categories. This plugin never creates categories.",
+      description: "List existing Firefly categories.",
       parameters: Type.Object(
         { page: Page, limit: Limit, start: Type.Optional(DateOnly), end: Type.Optional(DateOnly) },
         { additionalProperties: false },
       ),
       execute: (params, config, context) =>
         safely(() => service(config, context.api.logger).listCategories(params, context.signal)),
+    }),
+    tool({
+      name: "firefly_expense_account_create",
+      label: "Create Firefly expense account",
+      description: "Create an expense account with a name and optional notes. The account type is always expense.",
+      parameters: Type.Object({ name: CreationName, notes: Notes }, { additionalProperties: false }),
+      execute: (params, config, context) => safely(() => service(config, context.api.logger).createExpenseAccount(params, context.signal)),
+    }),
+    tool({
+      name: "firefly_category_create",
+      label: "Create Firefly category",
+      description: "Create a Firefly category with a name and optional notes.",
+      parameters: Type.Object({ name: CategoryName, notes: Notes }, { additionalProperties: false }),
+      execute: (params, config, context) => safely(() => service(config, context.api.logger).createCategory(params, context.signal)),
     }),
     tool({
       name: "firefly_budgets_list",
@@ -132,6 +149,13 @@ export default defineToolPlugin({
       parameters: Type.Object({ page: Page, limit: Limit }, { additionalProperties: false }),
       execute: (params, config, context) =>
         safely(() => service(config, context.api.logger).listTags(params, context.signal)),
+    }),
+    tool({
+      name: "firefly_tag_create",
+      label: "Create Firefly tag",
+      description: "Create a Firefly tag with a name and optional description.",
+      parameters: Type.Object({ name: CreationName, description: Notes }, { additionalProperties: false }),
+      execute: (params, config, context) => safely(() => service(config, context.api.logger).createTag(params, context.signal)),
     }),
     tool({
       name: "firefly_accounts_list",
@@ -202,6 +226,13 @@ export default defineToolPlugin({
       ),
       execute: (params, config, context) =>
         safely(() => service(config, context.api.logger).testRule(params, context.signal)),
+    }),
+    tool({
+      name: "firefly_rule_execute",
+      label: "Execute Firefly rule historically",
+      description: "Invoke only after the user explicitly approves the immediately prior full-scope preview of an active confirmed rule. Execute that unchanged rule against all accounts and all dates; this backfills history and does not activate it. `confirmed: true` records this invocation as the confirmation step, but is not proof of human approval. A preview receipt is single-use.",
+      parameters: Type.Object({ id: Id, expectedPreviewReceipt: Type.String({ pattern: "^[0-9a-f]{64}$" }), confirmed: Type.Literal(true) }, { additionalProperties: false }),
+      execute: ({ id, expectedPreviewReceipt, confirmed }, config, context) => safely(() => service(config, context.api.logger).executeRule(id, expectedPreviewReceipt, confirmed, context.signal)),
     }),
     tool({
       name: "firefly_rule_update_pending",

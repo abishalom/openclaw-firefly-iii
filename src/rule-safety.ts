@@ -52,6 +52,16 @@ export function createConfirmedDescription(marker: PendingMarker, now = new Date
   const prefix = `[openclaw-firefly:confirmed:v1;proposal=${marker.proposalId};digest=${marker.proposalDigest};confirmed=${now.toISOString()}]`;
   return marker.userDescription === "" ? prefix : `${prefix}\n${marker.userDescription}`;
 }
+export function assertExecutionRule(rule: NormalizedRule): void {
+  if (!rule.active) {
+    throw new FireflyError("FIREFLY_RULE_NOT_PENDING", "Historical execution requires an active confirmed OpenClaw rule; confirm it, then preview it again.");
+  }
+  const description = rule.description ?? "";
+  const match = /^\[openclaw-firefly:confirmed:v1;proposal=[0-9a-f-]{36};digest=([0-9a-f]{64});confirmed=[^\]]+\](?:\n|$)/u.exec(description);
+  if (match?.[1] === undefined || proposalDigest(rule, description.slice(match[0].length)) !== match[1]) {
+    throw new FireflyError("FIREFLY_RULE_NOT_PENDING", "The rule is not an intact OpenClaw-owned rule eligible for historical execution.");
+  }
+}
 export function assertPendingRule(rule: NormalizedRule): PendingMarker {
   const marker = parsePendingDescription(rule.description);
   if (marker === null || rule.active || marker.proposalDigest !== proposalDigest(rule, marker.userDescription)) {

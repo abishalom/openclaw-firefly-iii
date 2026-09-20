@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { FireflyError } from "../../src/errors.js";
 import {
   assertAllowedActions,
+  assertExecutionRule,
   assertPendingRule,
   createPendingDescription,
   proposalDigest,
@@ -54,6 +55,14 @@ describe("pending rule safety", () => {
   it("refuses ordinary and active rules", () => {
     expect(() => assertPendingRule(rule({ description: "ordinary" }))).toThrowError(FireflyError);
     expect(() => assertPendingRule(rule({ active: true }))).toThrowError(FireflyError);
+  });
+
+  it("permits only intact active confirmed OpenClaw rules for execution", () => {
+    expect(() => assertExecutionRule(rule())).toThrowError(FireflyError);
+    const pending = rule();
+    const confirmedDescription = `[openclaw-firefly:confirmed:v1;proposal=123e4567-e89b-42d3-a456-426614174000;digest=${pending.proposalDigest};confirmed=2026-09-17T12:00:00.000Z]\nUser note`;
+    expect(() => assertExecutionRule({ ...pending, active: true, description: confirmedDescription })).not.toThrow();
+    expect(() => assertExecutionRule({ ...pending, active: true, description: "ordinary" })).toThrowError(FireflyError);
   });
 
   it("allows category, destination, or one of each and rejects dangerous actions", () => {

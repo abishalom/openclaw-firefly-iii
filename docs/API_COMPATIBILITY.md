@@ -39,10 +39,24 @@ Requests use `application/json`. The client accepts both `application/vnd.api+js
 | get rule | `GET /v1/rules/{id}` | ID |
 | list rule groups | `GET /v1/rule-groups` | `page`, `limit` |
 | documented native rule test | `GET /v1/rules/{id}/test` | `start`, `end`, repeated `accounts[]` |
+| create expense account | `POST /v1/accounts` | `name`, fixed `type: "expense"`, optional `notes` |
+| create category | `POST /v1/categories` | `name`, optional `notes` |
+| create tag | `POST /v1/tags` | `tag`, optional `description` |
+| historical rule trigger | `POST /v1/rules/{id}/trigger` | `{ "accounts": [] }` means the endpoint's all-accounts default; omitted dates mean all dates |
 
 The native test endpoint returns `TransactionArray`, but a verified v6.7.2 deployment returned an empty set for a rule that Firefly's own web preview matched. The web preview does not call this endpoint: `Rule\IndexController::search` calls `RuleRepository::getSearchQuery` and redirects to Firefly search.
 
 Accordingly, `firefly_rule_test` fetches the persisted rule and mirrors the v6.7.2 search translation inside the plugin, then calls `GET /v1/search/transactions`. Strict rules compile to one AND query. Non-strict rules compile to ordered per-trigger searches whose normalized results are unioned; trigger-level stop-processing is honored. Aliases, prohibited triggers, context-free triggers, optional date bounds, and optional account IDs are translated deterministically. Trigger types outside the plugin's reviewed allowlist fail closed. `maxResults` bounds normalized tool output and the result reports whether it was truncated.
+
+### Direct metadata creation
+
+The direct creation tools deliberately send only the documented fields above. In particular, Firefly's tag store field is `tag`, not `name`; the plugin maps its ergonomic `name` input to that upstream field. Expense-account type is selected inside the service and cannot be supplied by a tool caller.
+
+### Historical rule execution
+
+`POST /v1/rules/{id}/trigger` is Firefly's supported synchronous historical execution endpoint. v6.7.2's engine skips inactive rules while the endpoint still returns 204, so the plugin requires an active, intact OpenClaw-confirmed rule; activation changes semantics and therefore requires a fresh post-activation preview. The plugin sends `{ "accounts": [] }`, relying on the v6.7.2 all-accounts behavior, and omits date bounds for all dates. It exposes no narrower trigger payload. The search preview is inherently not an exact execution simulation: it has a result cap/pagination behavior and mirrors only the reviewed trigger subset.
+
+A full-scope preview verifies `/about` is exactly v6.7.2 and yields an in-memory, 15-minute, single-use receipt binding the rule's normalized semantic digest, fixed scope, and a non-exported hash of canonical API base URL plus credential identity. Execution verifies the same backend/version and re-fetches/revalidates the rule before POSTing. Filtered previews are labelled `limited-preview-only` and cannot execute. The receipt is consumed before the mutation request, so a timeout, network failure, cancellation, or 5xx reports an uncertain outcome and cannot replay the same receipt. `confirmed: true` records the required execute invocation confirmation but is model input, not cryptographic proof of human approval; the tool instruction and calling workflow remain the human-approval boundary.
 
 ### `RuleStore`
 
@@ -79,6 +93,8 @@ Firefly upgrades require rerunning the lifecycle integration tests and reviewing
 3. transaction/rule transformers;
 4. the web rule-to-search translation and `/search/transactions` behavior;
 5. `/rules/{id}/test` behavior, so the documented endpoint can be reconsidered if fixed;
-6. response media types and envelopes.
+6. `/rules/{id}/trigger` request validation, active-rule requirement, synchronous failure/partial-side-effect semantics, and all-account defaults;
+7. account/category/tag store field validation and response transformers;
+8. response media types and envelopes.
 
 New action keywords are denied until explicitly reviewed.

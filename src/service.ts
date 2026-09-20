@@ -1,11 +1,13 @@
+import { createHash } from "node:crypto";
 import type { FireflyClient } from "./client.js";
 import { FireflyError } from "./errors.js";
 import {
-  assertAllowedActions, assertAllowedTriggers, assertPendingRule, createConfirmedDescription,
+  assertAllowedActions, assertAllowedTriggers, assertExecutionRule, assertPendingRule, createConfirmedDescription,
   createPendingDescription, parsePendingDescription, proposalDigest, updatePendingDescription,
 } from "./rule-safety.js";
 import { compileRulePreview } from "./rule-preview.js";
 import { normalizeAccountCollection } from "./schemas/accounts.js";
+import { normalizeCreatedCategory, normalizeCreatedExpenseAccount, normalizeCreatedTag } from "./schemas/created.js";
 import { normalizeBudgetCollection, normalizeTagCollection } from "./schemas/metadata.js";
 import { normalizeCategoryCollection, normalizeRuleCollection, normalizeRuleGroupCollection, normalizeRuleSingle, type NormalizedRule, type RuleActionInput, type RuleMoment, type RuleTriggerInput } from "./schemas/rules.js";
 import { normalizeTransactionCollection, normalizeTransactionSingle, type NormalizedTransactionGroup, type TransactionPage } from "./schemas/transactions.js";
@@ -22,8 +24,15 @@ export interface RulePreviewResult extends TransactionPage {
   queries: string[];
   executedQueries: number;
   previewEngine: "firefly-search";
+  previewReceipt: string;
+  executionScope: "all-accounts-all-dates" | "limited-preview-only";
+  executionBackend: "firefly-v6.7.2-rule-trigger";
   truncated: boolean;
 }
+
+interface PreviewReceipt { ruleId: string; ruleDigest: string; scope: "all-accounts-all-dates" | "limited-preview-only"; backendIdentity: string; used: boolean; expiresAt: number; }
+const previewReceipts = new Map<string, PreviewReceipt>();
+const PREVIEW_RECEIPT_TTL_MS = 15 * 60 * 1_000;
 export interface CreatePendingRuleInput { title: string; description?: string; ruleGroupId: string; trigger?: RuleMoment; strict?: boolean; stopProcessing?: boolean; order?: number; triggers: RuleTriggerInput[]; actions: RuleActionInput[]; }
 export interface UpdatePendingRuleInput { id: string; title?: string; description?: string; ruleGroupId?: string; trigger?: RuleMoment; strict?: boolean; stopProcessing?: boolean; order?: number; triggers?: RuleTriggerInput[]; actions?: RuleActionInput[]; }
 
@@ -41,6 +50,21 @@ async function withRuleLock<T>(id: string, operation: () => Promise<T>): Promise
 export class FireflyService {
   constructor(private readonly client: FireflyClient, private readonly allowBestEffortPendingRuleDeletion = false) {}
 
+  async createExpenseAccount(input: { name: string; notes?: string }, signal?: AbortSignal) {
+    validateCreationText(input.name, "name", 1024);
+    if (input.notes !== undefined) validateOptionalText(input.notes, "notes", 32_000);
+    return this.createWithUncertainOutcome(() => this.client.post<unknown>("/accounts", { name: input.name, type: "expense", ...(input.notes === undefined ? {} : { notes: input.notes }) }, withSignal(signal)).then(normalizeCreatedExpenseAccount));
+  }
+  async createCategory(input: { name: string; notes?: string }, signal?: AbortSignal) {
+    validateCreationText(input.name, "name", 100);
+    if (input.notes !== undefined) validateOptionalText(input.notes, "notes", 32_000);
+    return this.createWithUncertainOutcome(() => this.client.post<unknown>("/categories", { name: input.name, ...(input.notes === undefined ? {} : { notes: input.notes }) }, withSignal(signal)).then(normalizeCreatedCategory));
+  }
+  async createTag(input: { name: string; description?: string }, signal?: AbortSignal) {
+    validateCreationText(input.name, "name", 1024);
+    if (input.description !== undefined) validateOptionalText(input.description, "description", 32_000);
+    return this.createWithUncertainOutcome(() => this.client.post<unknown>("/tags", { tag: input.name, ...(input.description === undefined ? {} : { description: input.description }) }, withSignal(signal)).then(normalizeCreatedTag));
+  }
   async listTransactions(params: TransactionListParams, signal?: AbortSignal) { return normalizeTransactionCollection(await this.client.get<unknown>("/transactions", { query: { page: params.page, limit: params.limit, start: params.start, end: params.end, type: params.type }, ...withSignal(signal) })); }
   async getTransaction(id: string, signal?: AbortSignal) { return normalizeTransactionSingle(await this.client.get<unknown>(`/transactions/${resourceId(id)}`, withSignal(signal))); }
   async searchTransactions(params: TransactionSearchParams, signal?: AbortSignal) { return normalizeTransactionCollection(await this.client.get<unknown>("/search/transactions", { query: { query: params.query, page: params.page, limit: params.limit }, ...withSignal(signal) })); }
@@ -63,6 +87,7 @@ export class FireflyService {
       throw new FireflyError("FIREFLY_VALIDATION_FAILED", "accountIds must contain 1 to 100 Firefly account IDs.");
     }
     const accountIds = params.accountIds?.map(resourceId);
+    const backendIdentity = await this.verifiedBackendIdentity(signal);
     const rule = await this.getRule(id, signal);
     const compiled = compileRulePreview(rule, {
       ...(params.start === undefined ? {} : { start: params.start }),
@@ -96,12 +121,21 @@ export class FireflyService {
       }
     }
 
+    // Firefly's trigger endpoint has no bounded dry-run. A filtered search is
+    // useful for inspection but cannot authorize the fixed full-history backfill.
+    const executionScope = params.start === undefined && params.end === undefined && params.accountIds === undefined
+      ? "all-accounts-all-dates" as const
+      : "limited-preview-only" as const;
+    const previewReceipt = rememberPreview(rule, executionScope, backendIdentity);
     return {
       ruleId: rule.id,
       strict: compiled.strict,
       queries: compiled.queries,
       executedQueries,
       previewEngine: "firefly-search",
+      previewReceipt,
+      executionScope,
+      executionBackend: "firefly-v6.7.2-rule-trigger",
       truncated,
       transactions,
       pagination: {
@@ -112,6 +146,29 @@ export class FireflyService {
         totalPages: compiled.strict && !truncated ? 1 : null,
       },
     };
+  }
+
+  private async createWithUncertainOutcome<T>(operation: () => Promise<T>): Promise<T> {
+    try { return await operation(); } catch (error) {
+      if (error instanceof FireflyError && ["FIREFLY_TIMEOUT", "FIREFLY_NETWORK_ERROR", "FIREFLY_CANCELLED", "FIREFLY_TEMPORARY_FAILURE", "FIREFLY_INVALID_RESPONSE"].includes(error.code)) {
+        throw new FireflyError("FIREFLY_CREATION_UNCERTAIN", "Creation may have succeeded but could not be verified. Inspect Firefly before attempting another creation.", undefined, { cause: error });
+      }
+      throw error;
+    }
+  }
+  private async verifiedBackendIdentity(signal?: AbortSignal): Promise<string> {
+    const about = await this.client.get<unknown>("/about", withSignal(signal));
+    const version = about !== null && typeof about === "object" && "data" in about
+      && about.data !== null && typeof about.data === "object" && "version" in about.data
+      ? about.data.version : undefined;
+    if (typeof version !== "string" || version.trim() === "") {
+      throw new FireflyError("FIREFLY_INVALID_RESPONSE", "Firefly returned an invalid /about response.");
+    }
+    if (version !== "6.7.2") throw new FireflyError("FIREFLY_RULE_UNSAFE", "Historical execution is supported only on a verified Firefly III v6.7.2 backend.");
+    const headers = new Headers({ Accept: "application/vnd.api+json, application/json", Authorization: `Bearer ${this.client.config.accessToken}` });
+    for (const [name, value] of Object.entries(this.client.config.headers)) headers.set(name, value);
+    const effectiveHeaders = [...headers.entries()].sort(([left], [right]) => left.localeCompare(right));
+    return createHash("sha256").update(JSON.stringify({ baseUrl: this.client.config.baseUrl.toString(), accessToken: this.client.config.accessToken, effectiveHeaders })).digest("hex");
   }
 
   private async searchPreviewQuery(query: string, maxResults: number, signal?: AbortSignal): Promise<{
@@ -142,6 +199,40 @@ export class FireflyService {
     }
     if (total !== null && total > transactions.length) truncated = true;
     return { transactions, total, truncated };
+  }
+
+  async executeRule(rawId: string, expectedPreviewReceipt: string, confirmed: true, signal?: AbortSignal): Promise<{ id: string; executed: true; executionScope: "all-accounts-all-dates" }> {
+    const id = resourceId(rawId);
+    if (confirmed !== true) throw new FireflyError("FIREFLY_VALIDATION_FAILED", "confirmed must be true.");
+    return withRuleLock(id, async () => {
+      const backendIdentity = await this.verifiedBackendIdentity(signal);
+      const receipt = previewReceipts.get(expectedPreviewReceipt);
+      if (receipt !== undefined && receipt.ruleId === id && receipt.scope === "limited-preview-only") {
+        throw new FireflyError("FIREFLY_RULE_PREVIEW_SCOPE_LIMITED", "A filtered preview cannot authorize historical execution. Preview this rule again without date or account filters.");
+      }
+      if (receipt === undefined || receipt.used || receipt.expiresAt < Date.now() || receipt.ruleId !== id || receipt.scope !== "all-accounts-all-dates" || receipt.backendIdentity !== backendIdentity) {
+        throw new FireflyError("FIREFLY_RULE_PREVIEW_REQUIRED", "A current preview receipt for this rule and the all-accounts/all-dates scope is required. Preview the rule again.");
+      }
+      const rule = await this.getRule(id, signal);
+      if (ruleSemanticDigest(rule) !== receipt.ruleDigest) {
+        throw new FireflyError("FIREFLY_RULE_PREVIEW_STALE", "The rule changed after it was previewed. Preview the current rule again before historical execution.");
+      }
+      assertExecutionRule(rule); assertAllowedTriggers(rule.triggers); assertAllowedActions(rule.actions);
+      await this.assertActionTargetsExist(rule.actions, signal);
+      // Consume before the request. A timeout or broken connection may still have
+      // started Firefly's synchronous backfill, so this receipt can never replay it.
+      receipt.used = true;
+      try {
+        const response = await this.client.post<unknown>(`/rules/${id}/trigger`, { accounts: [] }, withSignal(signal));
+        if (response !== undefined) throw new FireflyError("FIREFLY_INVALID_RESPONSE", "Firefly did not return the required empty 204 response for historical execution.");
+      } catch (error) {
+        if (error instanceof FireflyError && ["FIREFLY_TIMEOUT", "FIREFLY_NETWORK_ERROR", "FIREFLY_CANCELLED", "FIREFLY_TEMPORARY_FAILURE", "FIREFLY_INVALID_RESPONSE"].includes(error.code)) {
+          throw new FireflyError("FIREFLY_RULE_EXECUTION_UNCERTAIN", "Historical rule execution may have started but could not be confirmed. Inspect Firefly before attempting another execution.", undefined, { cause: error });
+        }
+        throw error;
+      }
+      return { id, executed: true, executionScope: "all-accounts-all-dates" };
+    });
   }
 
   async createPendingRule(input: CreatePendingRuleInput, signal?: AbortSignal): Promise<NormalizedRule> {
@@ -351,4 +442,16 @@ function snapshot(rule: Pick<NormalizedRule, "title" | "ruleGroupId" | "order" |
 function withSignal(signal: AbortSignal | undefined): { signal: AbortSignal } | Record<string, never> { return signal === undefined ? {} : { signal }; }
 function resourceId(id: string): string { if (!/^[1-9]\d*$/u.test(id)) throw new FireflyError("FIREFLY_VALIDATION_FAILED", "Firefly resource IDs must be non-zero canonical numeric strings without leading zeroes."); return encodeURIComponent(id); }
 function validateDateOnly(value: string, field: "start" | "end"): void { if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) throw new FireflyError("FIREFLY_VALIDATION_FAILED", `${field} must use YYYY-MM-DD format.`); }
+function rememberPreview(rule: NormalizedRule, scope: "all-accounts-all-dates" | "limited-preview-only", backendIdentity: string): string {
+  for (const [key, value] of previewReceipts) if (value.expiresAt < Date.now()) previewReceipts.delete(key);
+  const ruleDigest = ruleSemanticDigest(rule);
+  const receipt = createHash("sha256").update(JSON.stringify({ ruleId: rule.id, ruleDigest, scope, backendIdentity, at: Date.now() })).digest("hex");
+  previewReceipts.set(receipt, { ruleId: rule.id, ruleDigest, scope, backendIdentity, used: false, expiresAt: Date.now() + PREVIEW_RECEIPT_TTL_MS });
+  return receipt;
+}
+function ruleSemanticDigest(rule: NormalizedRule): string {
+  return createHash("sha256").update(JSON.stringify({ title: rule.title, ruleGroupId: rule.ruleGroupId, order: rule.order, trigger: rule.trigger, active: rule.active, strict: rule.strict, stopProcessing: rule.stopProcessing, triggers: rule.triggers, actions: rule.actions })).digest("hex");
+}
+function validateCreationText(value: string, field: string, maxLength: number): void { if (value.trim() === "" || value.length > maxLength) throw new FireflyError("FIREFLY_VALIDATION_FAILED", `${field} must contain 1 to ${maxLength} characters.`); }
+function validateOptionalText(value: string, field: string, maxLength: number): void { if (value.length > maxLength) throw new FireflyError("FIREFLY_VALIDATION_FAILED", `${field} must not exceed ${maxLength} characters.`); }
 function validateRuleTitle(title: string): void { if (title.trim() === "" || title.length > 100) throw new FireflyError("FIREFLY_RULE_UNSAFE", "Rule title must contain 1 to 100 characters."); }

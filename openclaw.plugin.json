@@ -31,10 +31,22 @@
             "properties": {
               "source": {
                 "anyOf": [
-                  { "const": "env", "type": "string" },
-                  { "const": "file", "type": "string" },
-                  { "const": "exec", "type": "string" },
-                  { "const": "store", "type": "string" }
+                  {
+                    "type": "string",
+                    "const": "env"
+                  },
+                  {
+                    "type": "string",
+                    "const": "file"
+                  },
+                  {
+                    "type": "string",
+                    "const": "exec"
+                  },
+                  {
+                    "type": "string",
+                    "const": "store"
+                  }
                 ]
               },
               "provider": {
@@ -70,10 +82,22 @@
                 "properties": {
                   "source": {
                     "anyOf": [
-                      { "const": "env", "type": "string" },
-                      { "const": "file", "type": "string" },
-                      { "const": "exec", "type": "string" },
-                      { "const": "store", "type": "string" }
+                      {
+                        "type": "string",
+                        "const": "env"
+                      },
+                      {
+                        "type": "string",
+                        "const": "file"
+                      },
+                      {
+                        "type": "string",
+                        "const": "exec"
+                      },
+                      {
+                        "type": "string",
+                        "const": "store"
+                      }
                     ]
                   },
                   "provider": {
@@ -141,14 +165,18 @@
       "firefly_transaction_get",
       "firefly_transactions_search",
       "firefly_categories_list",
+      "firefly_expense_account_create",
+      "firefly_category_create",
       "firefly_budgets_list",
       "firefly_tags_list",
+      "firefly_tag_create",
       "firefly_accounts_list",
       "firefly_rules_list",
       "firefly_rule_get",
       "firefly_rule_groups_list",
       "firefly_rule_create_pending",
       "firefly_rule_test",
+      "firefly_rule_execute",
       "firefly_rule_update_pending",
       "firefly_rule_confirm_pending",
       "firefly_rule_reject_pending"

@@ -25,7 +25,7 @@ Reduce ongoing LLM involvement by converting recurring categorization decisions 
 - No generic arbitrary HTTP tool.
 - No generic Firefly rule deletion capability.
 - No automatic activation of newly proposed rules.
-- No execution/triggering of rules against historical transactions.
+- No generic or arbitrary execution/triggering of rules against historical transactions; the constrained full-scope receipt-bound execution workflow is documented separately.
 - No changes to transaction amount, currency, deletion state, or arbitrary financially sensitive fields. Account changes and conversion to transfers are allowed only through reviewed pending rules.
 - No custom Firefly fork or modification.
 - No separate microservice unless future constraints require one.
@@ -290,7 +290,7 @@ The plugin should preserve Firefly pagination rather than silently retrieving an
 | list categories | `GET /v1/categories` | Resolve valid existing categorization targets |
 | optional category details | `GET /v1/categories/{id}` | Only if needed by implementation |
 
-No category create/update/delete tool is required for v1.
+A constrained direct category-create tool is supported: name plus optional notes only. Category update/delete remains out of scope.
 
 ### 6.3 Rules
 
@@ -305,7 +305,7 @@ No category create/update/delete tool is required for v1.
 
 Firefly's web preview uses `RuleRepository::getSearchQuery`, not the documented native rule-test endpoint. The plugin mirrors that translation for its reviewed trigger subset and exposes safe optional date/account filters. Strict rules use one AND query; non-strict rules use ordered searches whose results are unioned inside the plugin.
 
-The Firefly API also exposes `POST /v1/rules/{id}/trigger`. **Do not expose or use this in v1.** The purpose of v1 is to create future deterministic behavior, not bulk-edit historical data.
+The Firefly API exposes `POST /v1/rules/{id}/trigger` for synchronous historical execution. It is exposed only as `firefly_rule_execute`, after activation and a fresh actual unfiltered `firefly_rule_test` receipt of the active confirmed rule. It always uses the endpoint's all-accounts/all-dates scope; no arbitrary trigger payload is exposed. This is distinct from activating a rule: v6.7.2 skips inactive rules. 5xx, timeout, cancellation, and network interruption are uncertain execution outcomes that must be inspected rather than retried; `confirmed: true` is an explicit tool input but not independent proof of human approval.
 
 ### 6.4 Rule groups
 
@@ -353,10 +353,14 @@ firefly_rule_groups_list
 ### Constrained write tools
 
 ```text
+firefly_expense_account_create
+firefly_category_create
+firefly_tag_create
 firefly_rule_create_pending
 firefly_rule_update_pending
 firefly_rule_confirm_pending
 firefly_rule_reject_pending
+firefly_rule_execute
 ```
 
 The write tools should internally call Firefly's create/update/delete rule endpoints but enforce additional invariants.
@@ -455,7 +459,7 @@ Named targets must already exist. Firefly uses `convert_transfer`, not `set_tran
 - convert to withdrawal or deposit
 - include credentials or other secrets in descriptions or notes
 - invoke webhook/network-related side effects
-- execute rules against historical transactions
+- execute rules against historical transactions except through the receipt-bound `firefly_rule_execute` full-scope workflow
 - arbitrary rule deletion
 
 If Firefly adds new action types in a future release, they remain denied until explicitly reviewed and added to the allowlist.
@@ -748,7 +752,7 @@ The implementation must meet all of the following:
 - No raw `firefly_http_request` tool.
 - No generic transaction delete/update tool.
 - No generic rule delete tool.
-- No rule trigger/execution tool in v1.
+- No generic rule trigger/execution tool; only the constrained receipt-bound historical execution tool.
 - Pending-rule activation requires explicit user approval.
 - Plugin-owned rule marker checked before update/confirm/reject.
 - Rule actions enforced by code allowlist.

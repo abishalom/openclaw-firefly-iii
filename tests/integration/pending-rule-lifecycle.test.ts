@@ -27,6 +27,10 @@ let nextId: number;
 let confirmPayload: Record<string, unknown> | undefined;
 let corruptActivation: boolean;
 let failResignPut: boolean;
+let triggerFailure: number | undefined;
+let triggerDelay = false;
+let triggerResponse: "json" | "empty-200" | undefined;
+let aboutResponse: unknown = { data: { version: "6.7.2" } };
 let requests: Array<{ method: string; path: string; search: string }>;
 
 beforeEach(async () => {
@@ -35,6 +39,10 @@ beforeEach(async () => {
   confirmPayload = undefined;
   corruptActivation = false;
   failResignPut = false;
+  triggerFailure = undefined;
+  triggerDelay = false;
+  triggerResponse = undefined;
+  aboutResponse = { data: { version: "6.7.2" } };
   requests = [];
   const server = createServer(async (request, response) => {
     await route(request, response);
@@ -50,6 +58,7 @@ beforeEach(async () => {
     accessToken: "integration-token",
     headers: { "X-Proxy-Token": "required-proxy-token" },
     allowInsecureHttp: true,
+    requestTimeoutMs: 100,
   });
   service = new FireflyService(client, true);
 });
@@ -113,9 +122,66 @@ describe("pending rule lifecycle", () => {
     expect(confirmPayload && Object.keys(confirmPayload).sort()).toEqual(["active", "description"]);
     expect(rules.get(created.id)?.triggers).toEqual(beforeConfirm?.triggers);
     expect(rules.get(created.id)?.actions).toEqual(beforeConfirm?.actions);
+
+    const backfillPreview = await service.testRule({ id: created.id });
+    await expect(service.executeRule(created.id, backfillPreview.previewReceipt, true)).resolves.toEqual({
+      id: created.id, executed: true, executionScope: "all-accounts-all-dates",
+    });
+    expect(requests.some((request) => request.method === "POST" && request.path.endsWith("/trigger"))).toBe(true);
   });
 
-  it("re-signs v6.7.2 canonical response semantics without double-escaping", async () => {
+  it("requires a current full-scope preview and refuses changed or replayed rules", async () => {
+    const pending = await service.createPendingRule({ title: "Backfill", ruleGroupId: "7", triggers: [{ type: "description_contains", value: "SUPER" }], actions: [{ type: "set_category", value: "Groceries" }] });
+    await service.confirmPendingRule(pending.id, pending.proposalDigest!);
+    const full = await service.testRule({ id: pending.id });
+    await expect(service.executeRule(pending.id, "0".repeat(64), true)).rejects.toMatchObject({ code: "FIREFLY_RULE_PREVIEW_REQUIRED" });
+    const limited = await service.testRule({ id: pending.id, start: "2026-01-01" });
+    await expect(service.executeRule(pending.id, limited.previewReceipt, true)).rejects.toMatchObject({ code: "FIREFLY_RULE_PREVIEW_SCOPE_LIMITED" });
+    rules.get(pending.id)!.title = "Changed";
+    await expect(service.executeRule(pending.id, full.previewReceipt, true)).rejects.toMatchObject({ code: "FIREFLY_RULE_PREVIEW_STALE" });
+    rules.get(pending.id)!.title = "Backfill";
+    const current = await service.testRule({ id: pending.id });
+    await service.executeRule(pending.id, current.previewReceipt, true);
+    await expect(service.executeRule(pending.id, current.previewReceipt, true)).rejects.toMatchObject({ code: "FIREFLY_RULE_PREVIEW_REQUIRED" });
+  });
+
+  it("reports upstream failure and uncertain timeout without replaying the receipt", async () => {
+    const pending = await service.createPendingRule({ title: "Backfill errors", ruleGroupId: "7", triggers: [{ type: "description_contains", value: "SUPER" }], actions: [{ type: "set_category", value: "Groceries" }] });
+    await service.confirmPendingRule(pending.id, pending.proposalDigest!);
+    const failed = await service.testRule({ id: pending.id });
+    triggerFailure = 500;
+    await expect(service.executeRule(pending.id, failed.previewReceipt, true)).rejects.toMatchObject({ code: "FIREFLY_RULE_EXECUTION_UNCERTAIN" });
+    await expect(service.executeRule(pending.id, failed.previewReceipt, true)).rejects.toMatchObject({ code: "FIREFLY_RULE_PREVIEW_REQUIRED" });
+    triggerFailure = undefined;
+    triggerDelay = true;
+    const uncertain = await service.testRule({ id: pending.id });
+    await expect(service.executeRule(pending.id, uncertain.previewReceipt, true)).rejects.toMatchObject({ code: "FIREFLY_RULE_EXECUTION_UNCERTAIN" });
+  });
+
+  it("requires the trigger endpoint's empty 204 response and binds receipts to effective headers", async () => {
+    const pending = await service.createPendingRule({ title: "Trigger response", ruleGroupId: "7", triggers: [{ type: "description_contains", value: "SUPER" }], actions: [{ type: "set_category", value: "Groceries" }] });
+    await service.confirmPendingRule(pending.id, pending.proposalDigest!);
+    triggerResponse = "json";
+    const jsonResponse = await service.testRule({ id: pending.id });
+    await expect(service.executeRule(pending.id, jsonResponse.previewReceipt, true)).rejects.toMatchObject({ code: "FIREFLY_RULE_EXECUTION_UNCERTAIN" });
+    triggerResponse = "empty-200";
+    const emptyResponse = await service.testRule({ id: pending.id });
+    await expect(service.executeRule(pending.id, emptyResponse.previewReceipt, true)).rejects.toMatchObject({ code: "FIREFLY_RULE_EXECUTION_UNCERTAIN" });
+    triggerResponse = undefined;
+    const headerBound = await service.testRule({ id: pending.id });
+    client.config.headers["X-Proxy-Token"] = "other-tenant";
+    await expect(service.executeRule(pending.id, headerBound.previewReceipt, true)).rejects.toMatchObject({ code: "FIREFLY_RULE_PREVIEW_REQUIRED" });
+    client.config.headers["X-Proxy-Token"] = "required-proxy-token";
+  });
+
+  it("rejects malformed and unsupported /about responses", async () => {
+    aboutResponse = { data: {} };
+    await expect(service.testRule({ id: "900" })).rejects.toMatchObject({ code: "FIREFLY_INVALID_RESPONSE" });
+    aboutResponse = { data: { version: "6.7.3" } };
+    await expect(service.testRule({ id: "900" })).rejects.toMatchObject({ code: "FIREFLY_RULE_UNSAFE" });
+  });
+
+  it("re-signs v6.7.2 canonical response semantics without double-escaping",  async () => {
     const created = await service.createPendingRule({
       title: "  Escaped title  ", description: "A & <B> \"quote\" 'apostrophe'",
       ruleGroupId: "7", order: 2048,
@@ -323,10 +389,13 @@ describe("pending rule lifecycle", () => {
 async function route(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const url = new URL(request.url ?? "/", "http://test");
   requests.push({ method: request.method ?? "GET", path: url.pathname, search: url.search });
-  if (request.headers.authorization !== "Bearer integration-token" || request.headers["x-proxy-token"] !== "required-proxy-token") {
+  if (request.headers.authorization !== "Bearer integration-token" || !["required-proxy-token", "other-tenant"].includes(String(request.headers["x-proxy-token"]))) {
     return json(response, 403, { message: "denied" });
   }
 
+  if (request.method === "GET" && url.pathname === "/api/v1/about") {
+    return json(response, 200, aboutResponse);
+  }
   if (request.method === "GET" && url.pathname === "/api/v1/categories") {
     return collection(response, [resource("categories", "1", { name: "Groceries", notes: null })]);
   }
@@ -364,6 +433,23 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     const state = stateFromBody(id, body);
     rules.set(id, state);
     return json(response, 200, singleRule(state));
+  }
+
+  const triggerMatch = /^\/api\/v1\/rules\/(\d+)\/trigger$/u.exec(url.pathname);
+  if (triggerMatch?.[1] && request.method === "POST") {
+    if (!rules.has(triggerMatch[1])) return json(response, 404, { message: "missing" });
+    const body = await readBody(request);
+    if (JSON.stringify(body) !== JSON.stringify({ accounts: [] })) return json(response, 422, { message: "unexpected scope" });
+    if (triggerFailure !== undefined) return json(response, triggerFailure, { message: "trigger failed" });
+    if (triggerResponse === "json") return json(response, 200, { data: { started: true } });
+    if (triggerResponse === "empty-200") { response.statusCode = 200; response.end(); return; }
+    if (triggerDelay) {
+      setTimeout(() => { response.statusCode = 204; response.end(); }, 200);
+      return;
+    }
+    response.statusCode = 204;
+    response.end();
+    return;
   }
 
   const match = /^\/api\/v1\/rules\/(\d+)$/u.exec(url.pathname);
