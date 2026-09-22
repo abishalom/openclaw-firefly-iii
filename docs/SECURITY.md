@@ -4,7 +4,7 @@
 
 The plugin reads bounded Firefly data, creates minimal expense accounts/categories/tags, and manages only marked Firefly rules. It does not expose arbitrary URLs, paths, methods, request bodies, request headers, transaction mutation/deletion, generic rule mutation/deletion, or arbitrary rule triggering.
 
-Historical execution is exposed only through `firefly_rule_execute`. It requires an active managed rule and `confirmed: true`, is supported only on Firefly III v6.7.2, and always targets all accounts and all dates.
+Historical execution is exposed only through `firefly_rule_execute`. It requires an active managed rule and `confirmed: true`, and always targets all accounts and all dates. There is no backend version gate; API failures are reported normally.
 
 ## Managed-rule boundary
 

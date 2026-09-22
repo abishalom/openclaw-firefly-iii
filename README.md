@@ -31,14 +31,14 @@ Sequence operations on one rule and dependent work (for example, deactivate → 
 - Deletion requires `confirmed: true` and an inactive rule. Activation, deactivation, and execution also require `confirmed: true`.
 - Rule triggers and actions are allowlisted. Referenced categories, active budgets, tags, and active accounts must already exist.
 - The plugin exposes no arbitrary URL/header/HTTP tool, transaction mutation or deletion, generic rule mutation, or arbitrary trigger endpoint.
-- Historical execution is supported only for Firefly III v6.7.2 and is always all-accounts/all-dates. Preview is search-based and may be truncated or unable to provide an exact total.
+- Historical execution is always all-accounts/all-dates; there is no backend version gate. Preview is search-based and may be truncated or unable to provide an exact total.
 - A timeout, network failure, 5xx, cancellation, or failed mutation readback can leave the outcome uncertain. Inspect Firefly before retrying; do not assume no change occurred.
 
 ## Requirements
 
 - Node.js 24.16+ or 26.1+
 - OpenClaw >= 2026.5.17
-- Firefly III v6.7.2 for historical execution
+- Firefly III with the rule trigger API for historical execution
 - A current Firefly Personal Access Token
 
 ## Build and test

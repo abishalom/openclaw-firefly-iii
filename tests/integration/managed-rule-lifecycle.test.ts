@@ -57,7 +57,7 @@ function mock(initial: State) {
 
   const client = {
     get: async (path: string) => {
-      if (path === "/about") return { data: { version: "6.7.2" } };
+      if (path === "/about") throw new Error("Rule operations must not query or gate on the backend version");
       if (path.startsWith("/rules/")) {
         if (didPut && readAfterPutError !== undefined) throw readAfterPutError;
         return resource(path.split("/").at(-1)!, state);
@@ -105,6 +105,13 @@ function mock(initial: State) {
 }
 
 describe("managed rule lifecycle", () => {
+  it("previews and executes without querying the backend version", async () => {
+    const m = mock(rule("101", { active: true }));
+    await expect(m.service.testRule({ id: "101" })).resolves.toMatchObject({ executionBackend: "firefly-rule-trigger" });
+    await expect(m.service.executeRule("101", true)).resolves.toMatchObject({ executed: true, executionScope: "all-accounts-all-dates" });
+    expect(m.triggers()).toBe(1);
+  });
+
   it("creates inactive managed rules and reads back Firefly's stored state", async () => {
     const m = mock(rule("101"));
     const created = await m.service.createRule({ title: "Rule", description: "hello", ruleGroupId: "7", triggers: [{ type: "description_starts", value: "OLD" }], actions: [{ type: "set_description", value: "new" }] });

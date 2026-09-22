@@ -13,7 +13,7 @@ The plugin does not include a categorizer skill, Telegram integration, schedulin
 
 - Node.js 24.16+ or 26.1+
 - OpenClaw >= 2026.5.17
-- Firefly III v6.7.2 for historical execution
+- Firefly III with the rule trigger API for historical execution (no version gate)
 - `baseUrl`, bearer token, and static proxy headers are operator configuration, not tool input
 
 Use SecretRefs for the bearer token and secret headers. HTTPS is required unless the operator deliberately enables HTTP for a trusted local/test network.
@@ -83,7 +83,7 @@ firefly_rule_execute
 | activate | Requires a managed rule and `confirmed: true`; enables future configured processing only. It never executes history. Already-active is a no-op. |
 | deactivate | Requires a managed rule and `confirmed: true`; disables it for editing. It never executes history. Already-inactive is a no-op. |
 | delete | Requires a managed inactive rule and `confirmed: true`. |
-| execute | Requires a managed active rule and `confirmed: true`; executes full history once on v6.7.2. |
+| execute | Requires a managed active rule and `confirmed: true`; executes full history once without a backend version gate. |
 
 Creation has no `confirmed` parameter. Activation, deactivation, deletion, and execution require `confirmed: true`. That value records an invocation confirmation step, not evidence that a human approved it.
 
@@ -106,7 +106,7 @@ Before rule creation, update, and activation, referenced categories, active budg
 
 ## History execution and uncertainty
 
-Historical execution calls Firefly's v6.7.2 rule trigger endpoint with all accounts and no date limit. It is not a transaction count or exact preview simulation. An active rule alone does not prove history ran.
+Historical execution calls Firefly's rule trigger endpoint with all accounts and no date limit. It is not a transaction count or exact preview simulation. An active rule alone does not prove history ran.
 
 A timeout, network error, cancellation, 5xx, malformed response, or failed readback after a write can leave the outcome uncertain. Report the known rule ID/state and stop for inspection; do not claim no change, blindly retry creation/execution, automatically roll back, or replay a batch. A successful DELETE response is sufficient to report deletion.
 

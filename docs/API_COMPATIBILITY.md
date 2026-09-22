@@ -2,7 +2,7 @@
 
 ## Verification target
 
-The rule and transport contracts were checked against Firefly III `v6.7.2`, its versioned OpenAPI file, and relevant route, validator, transformer, and rule-action source. Historical execution is deliberately restricted to an `/about` version of exactly `6.7.2`.
+The rule and transport contracts were checked against Firefly III `v6.7.2`, its versioned OpenAPI file, and relevant route, validator, transformer, and rule-action source. Rule operations do not query `/about` or require an exact backend version. This removes a policy gate, not API validation or a guarantee of compatibility with every release.
 
 Upstream references:
 
@@ -51,4 +51,4 @@ The action allowlist is `set_category`, `set_budget`, `add_tag`, `remove_tag`, `
 
 ## Upgrade policy
 
-When upgrading Firefly, rerun lifecycle coverage and review rule schemas, trigger/action enums, response normalization, web rule-to-search translation, `/rules/{id}/trigger` semantics, and the all-account default. Do not expand historical execution support beyond v6.7.2 without that verification.
+When upgrading Firefly, rerun lifecycle coverage and review rule schemas, trigger/action enums, response normalization, web rule-to-search translation, `/rules/{id}/trigger` semantics, and the all-account default. The plugin does not enforce a version allowlist; incompatibilities surface through ordinary API errors and response checks.

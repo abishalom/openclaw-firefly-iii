@@ -1,6 +1,6 @@
 {
   "name": "openclaw-firefly",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Managed Firefly III rule tools for OpenClaw",
   "type": "module",
   "private": true,

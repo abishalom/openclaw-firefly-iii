@@ -6,6 +6,8 @@ Reviewed revision: `43c4481660baf970f84df39a2ab68c533af08d58` — current `main`
 
 Status: implementation complete in the proposed 0.3.0 release, including deactivation and final readback fixes. All work groups completed. `npm run check` passes on Node 26.9.0: build, 41 tests (one opt-in live test skipped), plugin metadata check, and OpenClaw plugin validation. The earlier Node 24.13.0 validation blocker is resolved by using the supported runtime. No deployment or live Firefly mutations were performed; installed plugin revision and live rule payloads remain unverified. Findings below describe the original reviewed revision.
 
+Follow-up for 0.3.1: at the operator's request, the exact Firefly backend version gate was removed entirely, superseding this plan's recommendations to retain it. Rule operations no longer query `/about`; confirmation, scope warnings, input validation, and API outcome checks remain.
+
 ## 1. Goal and operating assumptions
 
 Make everyday rule creation, editing, activation, deletion, and historical execution straightforward for a personal Firefly installation.

@@ -66,7 +66,7 @@ export interface RulePreviewResult extends TransactionPage {
   executedQueries: number;
   previewEngine: "firefly-search";
   executionScope: "all-accounts-all-dates" | "limited-preview-only";
-  executionBackend: "firefly-v6.7.2-rule-trigger";
+  executionBackend: "firefly-rule-trigger";
   truncated: boolean;
 }
 export interface CreateRuleInput {
@@ -280,7 +280,7 @@ export class FireflyService {
       executionScope: params.start === undefined && params.end === undefined && params.accountIds === undefined
         ? "all-accounts-all-dates"
         : "limited-preview-only",
-      executionBackend: "firefly-v6.7.2-rule-trigger",
+      executionBackend: "firefly-rule-trigger",
       truncated,
       transactions,
       pagination: {
@@ -400,7 +400,6 @@ export class FireflyService {
   }> {
     const id = resourceId(rawId);
     requireConfirmation(confirmed);
-    await this.assertSupportedExecutionVersion(signal);
     const rule = await this.getRule(id, signal);
     assertManaged(rule);
     if (!rule.active) {
@@ -460,20 +459,6 @@ export class FireflyService {
         undefined,
         { cause: error },
       );
-    }
-  }
-
-  private async assertSupportedExecutionVersion(signal?: AbortSignal): Promise<void> {
-    const about = await this.client.get<unknown>("/about", withSignal(signal));
-    const version = about !== null && typeof about === "object" && "data" in about
-      && about.data !== null && typeof about.data === "object" && "version" in about.data
-      ? about.data.version
-      : undefined;
-    if (typeof version !== "string" || version.trim() === "") {
-      throw new FireflyError("FIREFLY_INVALID_RESPONSE", "Firefly returned an invalid /about response.");
-    }
-    if (version !== "6.7.2") {
-      throw new FireflyError("FIREFLY_RULE_UNSAFE", "Historical execution is supported only on a verified Firefly III v6.7.2 backend.");
     }
   }
 

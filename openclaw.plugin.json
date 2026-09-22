@@ -2,7 +2,7 @@
   "id": "openclaw-firefly",
   "name": "Firefly III",
   "description": "Safely inspect Firefly III and manage OpenClaw-managed rules.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "configSchema": {
     "type": "object",
     "required": [
