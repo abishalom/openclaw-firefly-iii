@@ -74,8 +74,6 @@ function makeRule(triggers: NormalizedRuleTrigger[], strict = true): NormalizedR
     updatedAt: null,
     triggers,
     actions: [{ type: "set_category", value: "Groceries", active: true, stopProcessing: false, order: 1 }],
-    pending: false,
-    pendingExpiresAt: null,
-    proposalDigest: null,
+    managed: false,
   };
 }

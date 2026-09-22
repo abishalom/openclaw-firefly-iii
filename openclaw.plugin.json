@@ -1,8 +1,8 @@
 {
   "id": "openclaw-firefly",
   "name": "Firefly III",
-  "description": "Safely inspect Firefly III and manage inactive, OpenClaw-owned rule proposals.",
-  "version": "0.2.1",
+  "description": "Safely inspect Firefly III and manage OpenClaw-managed rules.",
+  "version": "0.3.0",
   "configSchema": {
     "type": "object",
     "required": [
@@ -133,11 +133,6 @@
         "type": "boolean",
         "default": false,
         "description": "Permit plain HTTP for trusted local/test deployments. HTTPS is required by default."
-      },
-      "allowBestEffortPendingRuleDeletion": {
-        "type": "boolean",
-        "default": false,
-        "description": "Allow pending-rule deletion despite Firefly lacking conditional DELETE. Enable only when no external writers can modify rules."
       }
     },
     "additionalProperties": false
@@ -174,12 +169,13 @@
       "firefly_rules_list",
       "firefly_rule_get",
       "firefly_rule_groups_list",
-      "firefly_rule_create_pending",
+      "firefly_rule_create",
       "firefly_rule_test",
       "firefly_rule_execute",
-      "firefly_rule_update_pending",
-      "firefly_rule_confirm_pending",
-      "firefly_rule_reject_pending"
+      "firefly_rule_update",
+      "firefly_rule_activate",
+      "firefly_rule_deactivate",
+      "firefly_rule_delete"
     ]
   }
 }

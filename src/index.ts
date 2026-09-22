@@ -27,6 +27,8 @@ const RuleTrigger = Type.Object(
     type: RuleTriggerType,
     value: Type.String({ minLength: 1, maxLength: 1024 }),
     prohibited: Type.Optional(Type.Boolean()),
+    active: Type.Optional(Type.Boolean()),
+    stopProcessing: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -38,12 +40,14 @@ const RuleAction = Type.Object(
       maxLength: 32_000,
       description: "Action value. Named targets must exactly match an existing Firefly object; text actions use the supplied text.",
     }),
+    active: Type.Optional(Type.Boolean()),
+    stopProcessing: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
 
 function service(config: FireflyPluginConfig, logger: ConstructorParameters<typeof FireflyClient>[1]) {
-  return new FireflyService(new FireflyClient(config, logger), config.allowBestEffortPendingRuleDeletion ?? false);
+  return new FireflyService(new FireflyClient(config, logger));
 }
 
 async function safely<T>(operation: () => Promise<T>): Promise<T | { error: ReturnType<typeof safeError> }> {
@@ -57,7 +61,7 @@ async function safely<T>(operation: () => Promise<T>): Promise<T | { error: Retu
 export default defineToolPlugin({
   id: "openclaw-firefly",
   name: "Firefly III",
-  description: "Safely inspect Firefly III and manage inactive, OpenClaw-owned rule proposals.",
+  description: "Safely inspect Firefly III and manage OpenClaw-managed rules.",
   configSchema: fireflyConfigSchema,
   tools: (tool) => [
     tool({
@@ -190,9 +194,9 @@ export default defineToolPlugin({
         safely(() => service(config, context.api.logger).listRuleGroups(params, context.signal)),
     }),
     tool({
-      name: "firefly_rule_create_pending",
-      label: "Create pending Firefly rule",
-      description: "Create an inactive, marked Firefly rule proposal using only the curated metadata, text, account, and transfer-conversion actions.",
+      name: "firefly_rule_create",
+      label: "Create Firefly rule",
+      description: "Create an inactive OpenClaw-managed Firefly rule using supported triggers and actions. Creation does not execute historical transactions.",
       parameters: Type.Object(
         {
           title: Type.String({ minLength: 1, maxLength: 100 }),
@@ -208,12 +212,12 @@ export default defineToolPlugin({
         { additionalProperties: false },
       ),
       execute: (params, config, context) =>
-        safely(() => service(config, context.api.logger).createPendingRule(params, context.signal)),
+        safely(() => service(config, context.api.logger).createRule(params, context.signal)),
     }),
     tool({
       name: "firefly_rule_test",
       label: "Test Firefly rule",
-      description: "Fetch the persisted rule, deterministically compile its triggers to Firefly search syntax, and return normalized preview matches.",
+      description: "Fetch the persisted rule, compile its supported triggers to Firefly search syntax, and return preview examples, count when known, truncation, and scope. This never executes history.",
       parameters: Type.Object(
         {
           id: Id,
@@ -230,14 +234,14 @@ export default defineToolPlugin({
     tool({
       name: "firefly_rule_execute",
       label: "Execute Firefly rule historically",
-      description: "Invoke only after the user explicitly approves the immediately prior full-scope preview of an active confirmed rule. Execute that unchanged rule against all accounts and all dates; this backfills history and does not activate it. `confirmed: true` records this invocation as the confirmation step, but is not proof of human approval. A preview receipt is single-use.",
-      parameters: Type.Object({ id: Id, expectedPreviewReceipt: Type.String({ pattern: "^[0-9a-f]{64}$" }), confirmed: Type.Literal(true) }, { additionalProperties: false }),
-      execute: ({ id, expectedPreviewReceipt, confirmed }, config, context) => safely(() => service(config, context.api.logger).executeRule(id, expectedPreviewReceipt, confirmed, context.signal)),
+      description: "After explicit approval, execute an active OpenClaw-managed rule once against full history: all accounts and all dates. `confirmed: true` records this invocation's confirmation step, not independent proof of human approval. Preview and review the current rule first; filtered previews never narrow this execution scope. This does not activate the rule.",
+      parameters: Type.Object({ id: Id, confirmed: Type.Literal(true) }, { additionalProperties: false }),
+      execute: ({ id, confirmed }, config, context) => safely(() => service(config, context.api.logger).executeRule(id, confirmed, context.signal)),
     }),
     tool({
-      name: "firefly_rule_update_pending",
-      label: "Update pending Firefly rule",
-      description: "Update only an inactive OpenClaw-owned pending rule and keep it inactive.",
+      name: "firefly_rule_update",
+      label: "Update Firefly rule",
+      description: "Update only an inactive OpenClaw-managed rule and keep it inactive. Omitted fields are preserved; supplied triggers or actions replace the full corresponding array, so read and copy every entry, including prohibited, active, and stopProcessing flags, before changing one entry.",
       parameters: Type.Object(
         {
           id: Id,
@@ -254,23 +258,31 @@ export default defineToolPlugin({
         { additionalProperties: false },
       ),
       execute: (params, config, context) =>
-        safely(() => service(config, context.api.logger).updatePendingRule(params, context.signal)),
+        safely(() => service(config, context.api.logger).updateRule(params, context.signal)),
     }),
     tool({
-      name: "firefly_rule_confirm_pending",
-      label: "Confirm pending Firefly rule",
-      description: "After explicit user approval, activate exactly the reviewed OpenClaw-owned pending proposal digest.",
-      parameters: Type.Object({ id: Id, expectedProposalDigest: Type.String({ pattern: "^[0-9a-f]{64}$" }) }, { additionalProperties: false }),
-      execute: ({ id, expectedProposalDigest }, config, context) =>
-        safely(() => service(config, context.api.logger).confirmPendingRule(id, expectedProposalDigest, context.signal)),
+      name: "firefly_rule_activate",
+      label: "Activate Firefly rule",
+      description: "After explicit approval, activate an OpenClaw-managed rule. Activation enables future configured rule processing only; it never executes historical transactions.",
+      parameters: Type.Object({ id: Id, confirmed: Type.Literal(true) }, { additionalProperties: false }),
+      execute: ({ id, confirmed }, config, context) =>
+        safely(() => service(config, context.api.logger).activateRule(id, confirmed, context.signal)),
     }),
     tool({
-      name: "firefly_rule_reject_pending",
-      label: "Reject pending Firefly rule",
-      description: "Delete an inactive OpenClaw-owned pending rule only when allowBestEffortPendingRuleDeletion is explicitly enabled and no external rule writers exist.",
-      parameters: Type.Object({ id: Id }, { additionalProperties: false }),
-      execute: ({ id }, config, context) =>
-        safely(() => service(config, context.api.logger).rejectPendingRule(id, context.signal)),
+      name: "firefly_rule_deactivate",
+      label: "Deactivate Firefly rule",
+      description: "After explicit approval, deactivate an OpenClaw-managed rule so it can be edited. Deactivation never executes historical transactions.",
+      parameters: Type.Object({ id: Id, confirmed: Type.Literal(true) }, { additionalProperties: false }),
+      execute: ({ id, confirmed }, config, context) =>
+        safely(() => service(config, context.api.logger).deactivateRule(id, confirmed, context.signal)),
+    }),
+    tool({
+      name: "firefly_rule_delete",
+      label: "Delete Firefly rule",
+      description: "After explicit approval, delete an inactive OpenClaw-managed rule. Active rules must be deactivated first.",
+      parameters: Type.Object({ id: Id, confirmed: Type.Literal(true) }, { additionalProperties: false }),
+      execute: ({ id, confirmed }, config, context) =>
+        safely(() => service(config, context.api.logger).deleteRule(id, confirmed, context.signal)),
     }),
   ],
 });

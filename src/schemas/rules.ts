@@ -1,5 +1,5 @@
 import { invalidResponse } from "../errors.js";
-import { parsePendingDescription, semanticDigest } from "../rule-semantic-digest.js";
+import { parseManagedDescription } from "../rule-marker.js";
 import {
   asBoolean,
   asNumber,
@@ -69,11 +69,15 @@ export interface RuleTriggerInput {
   type: RuleTriggerType;
   value: string;
   prohibited?: boolean;
+  active?: boolean;
+  stopProcessing?: boolean;
 }
 
 export interface RuleActionInput {
   type: AllowedRuleActionType;
   value: string;
+  active?: boolean;
+  stopProcessing?: boolean;
 }
 
 export interface RawRuleTrigger {
@@ -146,9 +150,7 @@ export interface NormalizedRule {
   updatedAt: string | null;
   triggers: NormalizedRuleTrigger[];
   actions: NormalizedRuleAction[];
-  pending: boolean;
-  pendingExpiresAt: string | null;
-  proposalDigest: string | null;
+  managed: boolean;
 }
 
 export interface RulePage {
@@ -254,26 +256,18 @@ function normalizeRuleResource(value: unknown): NormalizedRule {
   // response layer so re-PUTs do not turn & into &amp;amp; and marker text is stable.
   const rawDescription = asString(attributes.description);
   const description = rawDescription === null ? null : decodeFireflyDescription(rawDescription);
-  const marker = parsePendingDescription(description);
+  const managed = parseManagedDescription(description) !== null;
   const order = asNumber(attributes.order);
   const active = asBoolean(attributes.active) ?? false;
   const strict = asBoolean(attributes.strict) ?? true;
   const stopProcessing = asBoolean(attributes.stop_processing) ?? false;
   const triggers = attributes.triggers.map((item) => normalizeTrigger(item));
   const actions = attributes.actions.map((item) => normalizeAction(item));
-  // `proposalDigest` reports marker presence; `pending` is reserved for a
-  // marker whose visible rule semantics verify, not merely one that exists.
-  const pending = marker !== null && !active && marker.proposalDigest === semanticDigest(
-    { title, ruleGroupId, order, trigger, strict, stopProcessing, triggers, actions },
-    marker.userDescription,
-  );
   return {
     id: value.id, title, description, ruleGroupId,
     ruleGroupTitle: asString(attributes.rule_group_title), trigger, order, active, strict, stopProcessing,
     createdAt: asString(attributes.created_at), updatedAt: asString(attributes.updated_at), triggers, actions,
-    pending,
-    pendingExpiresAt: marker?.expiresAt ?? null,
-    proposalDigest: marker?.proposalDigest ?? null,
+    managed,
   };
 }
 

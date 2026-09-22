@@ -1,7 +1,7 @@
 {
   "name": "openclaw-firefly",
-  "version": "0.2.1",
-  "description": "Security-constrained Firefly III rule proposal tools for OpenClaw",
+  "version": "0.3.0",
+  "description": "Managed Firefly III rule tools for OpenClaw",
   "type": "module",
   "private": true,
   "engines": {

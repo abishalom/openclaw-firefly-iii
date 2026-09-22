@@ -51,12 +51,6 @@ export const fireflyConfigSchema = Type.Object(
         description: "Permit plain HTTP for trusted local/test deployments. HTTPS is required by default.",
       }),
     ),
-    allowBestEffortPendingRuleDeletion: Type.Optional(
-      Type.Boolean({
-        default: false,
-        description: "Allow pending-rule deletion despite Firefly lacking conditional DELETE. Enable only when no external writers can modify rules.",
-      }),
-    ),
   },
   { additionalProperties: false },
 );
@@ -69,7 +63,6 @@ export interface NormalizedFireflyConfig {
   headers: Record<string, string>;
   requestTimeoutMs: number;
   maxResponseBytes: number;
-  allowBestEffortPendingRuleDeletion: boolean;
 }
 
 export function buildApiBaseUrl(value: string, allowInsecureHttp = false): URL {
@@ -136,6 +129,5 @@ export function normalizeConfig(config: FireflyPluginConfig): NormalizedFireflyC
     headers,
     requestTimeoutMs: config.requestTimeoutMs ?? 10_000,
     maxResponseBytes,
-    allowBestEffortPendingRuleDeletion: config.allowBestEffortPendingRuleDeletion ?? false,
   };
 }

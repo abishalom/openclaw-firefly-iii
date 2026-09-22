@@ -92,7 +92,7 @@ describe("Phase 1 Firefly reads", () => {
 
   it("lists rules, gets a rule, and lists groups", async () => {
     await expect(service.listRules({ page: 1, limit: 20 })).resolves.toMatchObject({
-      rules: [{ id: "3", active: false, pending: false }],
+      rules: [{ id: "3", active: false, managed: false }],
     });
     await expect(service.getRule("3")).resolves.toMatchObject({ id: "3", title: "User rule" });
     await expect(service.listRuleGroups({ page: 1, limit: 20 })).resolves.toMatchObject({

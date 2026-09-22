@@ -2,99 +2,53 @@
 
 ## Verification target
 
-Verified before implementation against:
-
-- Firefly III tag `v6.7.2` (tag commit `e36b2ab28e838a47b6073288eb3273c67abf3380`; annotated tag object advertised as `10cceef11e89cc5445af920425deb4ce1db96ffe`).
-- `firefly-iii/api-docs` versioned file `dist/firefly-iii-v6.7.2-v1.yaml` at repository commit `738ee5df30d9dd6e6bff5098f92d7b8c6fb02325` (SHA-256 `c888f791ac569e26265b9cc69ae5e640b22b5bc8df0f53330c90c36d53ae6534`).
-- Relevant v6.7.2 source request validators, transformers, route definitions, and rule actions.
+The rule and transport contracts were checked against Firefly III `v6.7.2`, its versioned OpenAPI file, and relevant route, validator, transformer, and rule-action source. Historical execution is deliberately restricted to an `/about` version of exactly `6.7.2`.
 
 Upstream references:
 
 - <https://github.com/firefly-iii/firefly-iii/tree/v6.7.2>
 - <https://github.com/firefly-iii/api-docs/blob/main/dist/firefly-iii-v6.7.2-v1.yaml>
 
-## Confirmed contracts
+## API behavior used
 
-### Media types and envelopes
+Read/create/update responses use JSON:API-style envelopes (`application/vnd.api+json`); requests use `application/json`. The client accepts both JSON media types.
 
-Read/create/update responses use `application/vnd.api+json` JSON:API-style envelopes:
+The plugin uses Firefly's transaction, metadata, account, rule, and rule-group read endpoints, plus constrained creation endpoints for expense accounts, categories, and tags. Rule operations use:
 
-- single: `{ data: { type, id, attributes, links? } }`
-- collection: `{ data: [...], meta: { pagination }, links? }`
+| Operation | Endpoint |
+|---|---|
+| list/get/create/update/delete rule | `/v1/rules` and `/v1/rules/{id}` |
+| preview | `GET /v1/rules/{id}`, then `GET /v1/search/transactions` |
+| historical execution | `POST /v1/rules/{id}/trigger` |
 
-Requests use `application/json`. The client accepts both `application/vnd.api+json` and `application/json` responses.
+The documented native rule-test endpoint was not used because a verified v6.7.2 deployment returned no matches where the web preview matched. `firefly_rule_test` instead translates the persisted supported triggers to Firefly search queries. Strict rules use one AND query; non-strict rules use ordered searches whose results are unioned. Unsupported triggers fail closed. A preview reports its result cap/truncation and only reports an exact count when Firefly supplies one.
 
-### Read endpoints
+## Managed rules and updates
 
-| Operation | Endpoint | Confirmed parameters |
-|---|---|---|
-| list transactions | `GET /v1/transactions` | `page`, `limit`, `start`, `end`, `type` |
-| get transaction | `GET /v1/transactions/{id}` | numeric/string path ID |
-| search transactions | `GET /v1/search/transactions` | required `query`, `page`, `limit` |
-| list categories | `GET /v1/categories` | `page`, `limit`, optional enrichment range |
-| list budgets | `GET /v1/budgets` | `page`, `limit`, optional enrichment range |
-| list tags | `GET /v1/tags` | `page`, `limit` |
-| list accounts | `GET /v1/accounts` | `type=all`, `page`, `limit` |
-| list rules | `GET /v1/rules` | `page`, `limit` |
-| get rule | `GET /v1/rules/{id}` | ID |
-| list rule groups | `GET /v1/rule-groups` | `page`, `limit` |
-| documented native rule test | `GET /v1/rules/{id}/test` | `start`, `end`, repeated `accounts[]` |
-| create expense account | `POST /v1/accounts` | `name`, fixed `type: "expense"`, optional `notes` |
-| create category | `POST /v1/categories` | `name`, optional `notes` |
-| create tag | `POST /v1/tags` | `tag`, optional `description` |
-| historical rule trigger | `POST /v1/rules/{id}/trigger` | `{ "accounts": [] }` means the endpoint's all-accounts default; omitted dates mean all dates |
+Firefly has no dedicated rule metadata field, so the description's anchored first line is the management marker. The current marker is:
 
-The native test endpoint returns `TransactionArray`, but a verified v6.7.2 deployment returned an empty set for a rule that Firefly's own web preview matched. The web preview does not call this endpoint: `Rule\IndexController::search` calls `RuleRepository::getSearchQuery` and redirects to Firefly search.
+```text
+[openclaw-firefly:managed:v1]
+```
 
-Accordingly, `firefly_rule_test` fetches the persisted rule and mirrors the v6.7.2 search translation inside the plugin, then calls `GET /v1/search/transactions`. Strict rules compile to one AND query. Non-strict rules compile to ordered per-trigger searches whose normalized results are unioned; trigger-level stop-processing is honored. Aliases, prohibited triggers, context-free triggers, optional date bounds, and optional account IDs are translated deterministically. Trigger types outside the plugin's reviewed allowlist fail closed. `maxResults` bounds normalized tool output and the result reports whether it was truncated.
+Legacy anchored `pending:v1` and `confirmed:v1` headers are also recognized. Their UUID/digest/expiry contents are opaque and are not verified. A requested update, activation, or actual deactivate write normalizes a legacy marker; reads, previews, execution, and already-correct state toggles do not write only to migrate it.
 
-### Direct metadata creation
+`RuleUpdate` supports partial updates. Scalar edits use the supplied fields. Supplying `triggers` or `actions` replaces the corresponding array, so callers must first read and copy every entry, including trigger `prohibited` and per-entry `active` and `stopProcessing` flags. New entries default to active and not-stop-processing. The plugin checks requested scalar and array values and flags in the GET readback but does not reject harmless server normalization of unrelated fields.
 
-The direct creation tools deliberately send only the documented fields above. In particular, Firefly's tag store field is `tag`, not `name`; the plugin maps its ergonomic `name` input to that upstream field. Expense-account type is selected inside the service and cannot be supplied by a tool caller.
+Creates request `active: false`; updates require an inactive managed rule. Activating/deactivating use a minimal active/description update and GET readback. Delete requires an inactive managed rule and relies on a successful DELETE response rather than an impossible post-delete readback.
 
-### Historical rule execution
+## Historical execution
 
-`POST /v1/rules/{id}/trigger` is Firefly's supported synchronous historical execution endpoint. v6.7.2's engine skips inactive rules while the endpoint still returns 204, so the plugin requires an active, intact OpenClaw-confirmed rule; activation changes semantics and therefore requires a fresh post-activation preview. The plugin sends `{ "accounts": [] }`, relying on the v6.7.2 all-accounts behavior, and omits date bounds for all dates. It exposes no narrower trigger payload. The search preview is inherently not an exact execution simulation: it has a result cap/pagination behavior and mirrors only the reviewed trigger subset.
+`POST /v1/rules/{id}/trigger` is a synchronous full-history operation. The plugin sends `{ "accounts": [] }`, which is the v6.7.2 all-accounts behavior, and omits dates, meaning all dates. It accepts only an active managed rule and `confirmed: true`; it has no preview receipt and does not make a filtered preview an execution boundary. Preview and explicit approval remain workflow responsibilities.
 
-A full-scope preview verifies `/about` is exactly v6.7.2 and yields an in-memory, 15-minute, single-use receipt binding the rule's normalized semantic digest, fixed scope, and a non-exported hash of canonical API base URL plus credential identity. Execution verifies the same backend/version and re-fetches/revalidates the rule before POSTing. Filtered previews are labelled `limited-preview-only` and cannot execute. The receipt is consumed before the mutation request, so a timeout, network failure, cancellation, or 5xx reports an uncertain outcome and cannot replay the same receipt. `confirmed: true` records the required execute invocation confirmation but is model input, not cryptographic proof of human approval; the tool instruction and calling workflow remain the human-approval boundary.
+The endpoint can have partial effects before a timeout, network failure, cancellation, malformed response, or 5xx. Such outcomes are reported as uncertain and must be inspected, not blindly retried.
 
-### `RuleStore`
+## Rule safety policy
 
-Confirmed required fields: `title`, `rule_group_id` (or source-supported title alternative), `trigger`, `triggers`, and `actions`. Relevant fields are `description`, `order`, `active`, `strict`, and `stop_processing`. The plugin always supplies `rule_group_id`, forces `active: false`, and supplies active trigger/action entries.
+`RuleStore` creation requires title, group, moment, triggers, and actions. The plugin forces inactive creation and supports the documented rule moments `store-journal`, `update-journal`, and `manual-activation`.
 
-### `RuleUpdate`
+The action allowlist is `set_category`, `set_budget`, `add_tag`, `remove_tag`, `set_description`, `set_notes`, `set_source_account`, `set_destination_account`, and `convert_transfer`. Referenced categories, active budgets, tags, and active accounts are checked by exact name. New actions remain denied until reviewed.
 
-All fields are optional and partial updates are supported. The plugin sends complete snake_case snapshots (including top-level `order`/`stop_processing` and active trigger/action entries) for pending updates. Confirmation verifies the reviewed inactive rule by GET, activates with a minimal partial update containing only `active` and the confirmed description marker, then validates the persisted rule with an authoritative GET. Its rollback deactivates only an activation it can still identify as its own, deliberately preserving concurrent semantic edits.
+## Upgrade policy
 
-### Rule enums
-
-Top-level rule moments are:
-
-- `store-journal`
-- `update-journal`
-- `manual-activation`
-
-The plugin's trigger allowlist is copied from the v6.7.2 OpenAPI `RuleTriggerKeyword` enum. The v6.7.2 source validator derives a larger set from `config/search.php`; the published enum is incomplete. To avoid silently depending on undocumented values, this plugin exposes only the published subset.
-
-The v6.7.2 source action configuration contains more keywords than the OpenAPI enum. The plugin accepts only the reviewed exact keywords `set_category`, `set_budget`, `add_tag`, `remove_tag`, `set_description`, `set_notes`, `set_source_account`, `set_destination_account`, and `convert_transfer`. Firefly expresses transaction-type changes as `convert_*` actions rather than `set_transaction_type`; only `convert_transfer` is exposed.
-
-Named targets are checked against the read endpoints before create, update, and confirm. `convert_withdrawal` and `convert_deposit` remain denied because Firefly can create new expense/revenue accounts from their action values. Amount changes, deletion, account switching, cash-account shortcuts, bill/piggy-bank links, clear-all operations, and every other action remain denied.
-
-### Ownership metadata
-
-`RuleStore` and `RuleUpdate` have no extension/metadata property. The supported `description` field (max 32768 in source validation) is used for the ownership/pending marker and SHA-256 semantic proposal digest. v6.7.2's `Rule` model HTML-escapes descriptions, trims titles, canonicalizes context-free trigger values, and clamps rule order. The plugin derives the digest from each normalized response and re-signs with a description-only inactive PUT when needed. IDs are canonical positive decimal strings (zero and leading zeroes are refused). v6.7.2 provides no ETag/version precondition or conditional DELETE; the plugin's in-process mutex and GET/verify/re-PUT sequence are therefore best-effort against external writers, not an atomic cross-client guarantee. Pending deletion is opt-in and requires no external writers.
-
-## Compatibility policy
-
-Firefly upgrades require rerunning the lifecycle integration tests and reviewing:
-
-1. `RuleStore` / `RuleUpdate` validators and schemas;
-2. trigger and action keyword lists;
-3. transaction/rule transformers;
-4. the web rule-to-search translation and `/search/transactions` behavior;
-5. `/rules/{id}/test` behavior, so the documented endpoint can be reconsidered if fixed;
-6. `/rules/{id}/trigger` request validation, active-rule requirement, synchronous failure/partial-side-effect semantics, and all-account defaults;
-7. account/category/tag store field validation and response transformers;
-8. response media types and envelopes.
-
-New action keywords are denied until explicitly reviewed.
+When upgrading Firefly, rerun lifecycle coverage and review rule schemas, trigger/action enums, response normalization, web rule-to-search translation, `/rules/{id}/trigger` semantics, and the all-account default. Do not expand historical execution support beyond v6.7.2 without that verification.
