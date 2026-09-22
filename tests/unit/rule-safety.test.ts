@@ -2,20 +2,20 @@ import { describe, expect, it } from "vitest";
 import { FireflyError } from "../../src/errors.js";
 import {
   assertAllowedActions,
-  assertExecutionRule,
-  assertPendingRule,
-  createPendingDescription,
-  proposalDigest,
-  parsePendingDescription,
-  updatePendingDescription,
+  assertAllowedTriggers,
+  assertInactive,
+  assertManaged,
+  formatManagedDescription,
+  isManaged,
+  parseManagedDescription,
 } from "../../src/rule-safety.js";
-import type { NormalizedRule } from "../../src/schemas/rules.js";
+import { normalizeRuleSingle, type NormalizedRule } from "../../src/schemas/rules.js";
 
 function rule(overrides: Partial<NormalizedRule> = {}): NormalizedRule {
-  const base = {
+  return {
     id: "1",
-    title: "Proposal",
-    description: null,
+    title: "Managed",
+    description: formatManagedDescription("User note"),
     order: 1,
     ruleGroupId: "2",
     ruleGroupTitle: "Default",
@@ -27,114 +27,77 @@ function rule(overrides: Partial<NormalizedRule> = {}): NormalizedRule {
     updatedAt: null,
     triggers: [{ type: "description_contains", value: "MARKET", prohibited: false, active: true, stopProcessing: false, order: 1 }],
     actions: [{ type: "set_category", value: "Groceries", active: true, stopProcessing: false, order: 1 }],
-    pending: true,
-    pendingExpiresAt: "2026-09-18T12:00:00.000Z",
-    proposalDigest: null,
-  } satisfies NormalizedRule;
-  const digest = proposalDigest(base, "User note");
-  return { ...base, description: createPendingDescription("User note", digest, new Date("2026-09-17T12:00:00.000Z"), "123e4567-e89b-42d3-a456-426614174000"), proposalDigest: digest, ...overrides };
+    managed: true,
+    ...overrides,
+  };
 }
 
-describe("pending rule safety", () => {
-  it("round-trips an anchored ownership marker and preserves its identity on edit", () => {
-    const description = rule().description;
-    const marker = parsePendingDescription(description);
-    expect(marker).toMatchObject({
-      proposalId: "123e4567-e89b-42d3-a456-426614174000",
-      userDescription: "User note",
+describe("managed rule safety", () => {
+  it("formats a single managed header and preserves human description losslessly", () => {
+    const humanDescription = "  First line & <tag>\n\nLast line  ";
+    const description = formatManagedDescription(humanDescription);
+    expect(description).toBe(`[openclaw-firefly:managed:v1]\n${humanDescription}`);
+    expect(parseManagedDescription(description)).toEqual({ marker: "managed:v1", userDescription: humanDescription });
+    expect(formatManagedDescription()).toBe("[openclaw-firefly:managed:v1]");
+    expect(() => formatManagedDescription("x".repeat(32_768))).toThrowError(/too long/u);
+  });
+
+  it("recognizes only anchored managed and legacy headers without checking legacy metadata", () => {
+    const legacyPending = "[openclaw-firefly:pending:v1;proposal=stale;digest=wrong;created=not-a-date;expires=expired]\nPending note";
+    const legacyConfirmed = "[openclaw-firefly:confirmed:v1;anything=old]\nConfirmed note";
+    expect(parseManagedDescription(legacyPending)).toEqual({ marker: "pending:v1", userDescription: "Pending note" });
+    expect(parseManagedDescription(legacyConfirmed)).toEqual({ marker: "confirmed:v1", userDescription: "Confirmed note" });
+    expect(parseManagedDescription("note\n[openclaw-firefly:managed:v1]")).toBeNull();
+    expect(parseManagedDescription("[openclaw-firefly:managed:v1] extra")).toBeNull();
+    expect(parseManagedDescription("[openclaw-firefly:pending:v2]\nNote")).toBeNull();
+  });
+
+  it("checks managed ownership and inactive state independently", () => {
+    expect(isManaged(rule())).toBe(true);
+    expect(() => assertManaged(rule({ description: "ordinary", managed: false }))).toThrowError(FireflyError);
+    expect(() => assertInactive(rule({ active: true }))).toThrowError(FireflyError);
+    expect(() => {
+      assertManaged(rule());
+      assertInactive(rule());
+    }).not.toThrow();
+  });
+
+  it("normalizes managed state while retaining editable trigger and action flags", () => {
+    const normalized = normalizeRuleSingle({
+      data: {
+        id: "1",
+        attributes: {
+          title: "Managed",
+          description: "[openclaw-firefly:managed:v1]\nA &amp; &lt;B&gt;",
+          rule_group_id: "2",
+          trigger: "store-journal",
+          active: false,
+          strict: false,
+          stop_processing: true,
+          triggers: [{ type: "description_contains", value: "MARKET", prohibited: true, active: true, stop_processing: true, order: 3 }],
+          actions: [{ type: "set_category", value: "Groceries", active: true, stop_processing: true, order: 4 }],
+        },
+      },
     });
-    const updated = updatePendingDescription(marker!, marker!.proposalDigest, "Revised note");
-    expect(parsePendingDescription(updated)).toMatchObject({
-      proposalId: marker?.proposalId,
-      createdAt: marker?.createdAt,
-      expiresAt: marker?.expiresAt,
-      userDescription: "Revised note",
-    });
-    expect(parsePendingDescription(description!.replace("proposal=123e4567-e89b-42d3-a456-426614174000", "proposal=------------------------------------"))).toBeNull();
-    expect(parsePendingDescription(description!.replace("created=2026-09-17T12:00:00.000Z", "created=not-a-date"))).toBeNull();
+    expect(normalized).toMatchObject({ managed: true, active: false, description: "[openclaw-firefly:managed:v1]\nA & <B>", strict: false, stopProcessing: true });
+    expect(normalized.triggers[0]).toMatchObject({ prohibited: true, active: true, stopProcessing: true, order: 3 });
+    expect(normalized.actions[0]).toMatchObject({ active: true, stopProcessing: true, order: 4 });
   });
 
-  it("ignores hidden-trigger numeric gaps but preserves sequence and values", () => {
-    const original = rule({
-      triggers: [
-        { type: "description_contains", value: "MARKET", prohibited: false, active: true, stopProcessing: false, order: 1 },
-        { type: "has_no_category", value: "true", prohibited: false, active: true, stopProcessing: false, order: 3 },
-      ],
-      actions: [
-        { type: "set_category", value: "Groceries", active: true, stopProcessing: false, order: 1 },
-        { type: "add_tag", value: "reviewed", active: true, stopProcessing: false, order: 4 },
-      ],
-    });
-    const digest = proposalDigest(original, "User note");
-    expect(proposalDigest({ ...original, triggers: original.triggers.map((trigger, index) => ({ ...trigger, order: index + 7 })), actions: original.actions.map((action, index) => ({ ...action, order: index + 9 })) }, "User note")).toBe(digest);
-    expect(proposalDigest({ ...original, triggers: [...original.triggers].reverse() }, "User note")).not.toBe(digest);
-    expect(proposalDigest({ ...original, actions: [{ ...original.actions[0]!, value: "Dining" }, original.actions[1]!] }, "User note")).not.toBe(digest);
-  });
-
-  it("refuses ordinary and active rules", () => {
-    expect(() => assertPendingRule(rule({ description: "ordinary" }))).toThrowError(FireflyError);
-    expect(() => assertPendingRule(rule({ active: true }))).toThrowError(FireflyError);
-  });
-
-  it("permits only intact active confirmed OpenClaw rules for execution", () => {
-    expect(() => assertExecutionRule(rule())).toThrowError(FireflyError);
-    const pending = rule();
-    const confirmedDescription = `[openclaw-firefly:confirmed:v1;proposal=123e4567-e89b-42d3-a456-426614174000;digest=${pending.proposalDigest};confirmed=2026-09-17T12:00:00.000Z]\nUser note`;
-    expect(() => assertExecutionRule({ ...pending, active: true, description: confirmedDescription })).not.toThrow();
-    expect(() => assertExecutionRule({ ...pending, active: true, description: "ordinary" })).toThrowError(FireflyError);
-  });
-
-  it("allows category, destination, or one of each and rejects dangerous actions", () => {
-    const individuallyAllowed = [
-      { type: "set_category", value: "Groceries" },
-      { type: "set_budget", value: "Household" },
-      { type: "add_tag", value: "recurring" },
-      { type: "remove_tag", value: "uncategorized" },
-      { type: "set_description", value: "Credit card autopay" },
-      { type: "set_notes", value: "Normalized by an approved rule" },
-      { type: "set_source_account", value: "Checking" },
-      { type: "set_destination_account", value: "Sarah's Tent" },
-      { type: "convert_transfer", value: "Credit Card" },
-    ] as const;
-    for (const action of individuallyAllowed) {
-      expect(() => assertAllowedActions([action])).not.toThrow();
-    }
-    expect(() => assertAllowedActions([
-      { type: "set_category", value: "Groceries" },
-      { type: "set_destination_account", value: "Sarah's Tent" },
-    ])).not.toThrow();
-    expect(() => assertAllowedActions([
-      { type: "set_budget", value: "Household" },
-      { type: "add_tag", value: "recurring" },
-      { type: "remove_tag", value: "uncategorized" },
-      { type: "set_description", value: "Credit card autopay" },
-      { type: "set_notes", value: "Normalized by an approved rule" },
-      { type: "set_source_account", value: "Checking" },
-      { type: "convert_transfer", value: "Credit Card" },
-    ])).not.toThrow();
-    expect(() => assertAllowedActions([{ type: "delete_transaction", value: "x", active: true }])).toThrowError(
-      /not allowed/u,
-    );
-    expect(() => assertAllowedActions([{ type: "set_amount", value: "0", active: true }])).toThrowError(
-      /not allowed/u,
-    );
-  });
-
-  it("requires non-empty targets and rejects duplicate action types", () => {
+  it("keeps the action allowlist and safety checks", () => {
+    expect(() => assertAllowedActions([{ type: "set_category", value: "Groceries" }])).not.toThrow();
+    expect(() => assertAllowedActions([{ type: "delete_transaction", value: "x", active: true }])).toThrowError(/not allowed/u);
     expect(() => assertAllowedActions([])).toThrowError(/1 to 20/u);
     expect(() => assertAllowedActions([{ type: "set_category", value: "" }])).toThrowError(/non-empty/u);
-    expect(() => assertAllowedActions([{ type: "set_destination_account", value: "" }])).toThrowError(/non-empty/u);
-    expect(() => assertAllowedActions([
-      { type: "set_category", value: "Groceries" },
-      { type: "set_category", value: "Dining" },
-    ])).toThrowError(/at most one set_category/u);
-    expect(() => assertAllowedActions([
-      { type: "set_destination_account", value: "Sarah's Tent" },
-      { type: "set_destination_account", value: "Other" },
-    ])).toThrowError(/at most one set_destination_account/u);
     expect(() => assertAllowedActions([
       { type: "add_tag", value: "recurring" },
       { type: "remove_tag", value: "recurring" },
     ])).toThrowError(/cannot both add and remove/u);
+  });
+
+  it("keeps trigger validation", () => {
+    expect(() => assertAllowedTriggers([{ type: "description_contains", value: "MARKET" }])).not.toThrow();
+    expect(() => assertAllowedTriggers([])).toThrowError(/trigger/u);
+    expect(() => assertAllowedTriggers([{ type: "delete_transaction", value: "x" } as never])).toThrowError(/not supported/u);
   });
 });

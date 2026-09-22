@@ -29,7 +29,7 @@ describe("direct metadata creation", () => {
   it("reports an ambiguous creation response as uncertain", async () => {
     const client = { post: async () => { throw new FireflyError("FIREFLY_TEMPORARY_FAILURE", "simulated"); } };
     const service = new FireflyService(client as never);
-    await expect(service.createCategory({ name: "Food" })).rejects.toMatchObject({ code: "FIREFLY_CREATION_UNCERTAIN" });
+    await expect(service.createCategory({ name: "Food" })).rejects.toMatchObject({ code: "FIREFLY_MUTATION_UNCERTAIN" });
   });
 
   it("rejects blank and oversized fields before a request", async () => {

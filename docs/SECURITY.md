@@ -2,55 +2,42 @@
 
 ## Exposed capability
 
-The model can read a paginated subset of Firefly data, directly create minimal expense accounts/categories/tags, and manage an inactive rule proposal lifecycle.
+The plugin reads bounded Firefly data, creates minimal expense accounts/categories/tags, and manages only marked Firefly rules. It does not expose arbitrary URLs, paths, methods, request bodies, request headers, transaction mutation/deletion, generic rule mutation/deletion, or arbitrary rule triggering.
 
-The plugin does **not** expose:
+Historical execution is exposed only through `firefly_rule_execute`. It requires an active managed rule and `confirmed: true`, is supported only on Firefly III v6.7.2, and always targets all accounts and all dates.
 
-- an arbitrary URL, path, method, body, or request-header tool;
-- transaction update/delete operations;
-- arbitrary Firefly rule trigger/execution endpoints (only the receipt-bound all-history execute path exists);
-- generic rule deletion;
-- budget, rule-group, or currency creation/mutation, or category/tag/account mutation beyond minimal direct creation;
-- amount, currency, webhook, arbitrary transaction-type, or delete actions.
+## Managed-rule boundary
 
-## Pending ownership
-
-Firefly v6.7.2 has no dedicated arbitrary metadata field on `RuleStore`/`RuleUpdate`. The rule `description` field is therefore used for an anchored marker:
+A managed rule has an anchored first-line description marker:
 
 ```text
-[openclaw-firefly:pending:v1;proposal=<uuid>;digest=<sha256>;created=<ISO-8601>;expires=<ISO-8601>]
+[openclaw-firefly:managed:v1]
 ```
 
-The marker is followed by the user-visible description. Its digest covers the canonical inactive proposal (title, group, moment, order, strict/stop flags, active trigger/action entries and user description). Update, confirmation, and rejection require a valid marker, matching digest, and `active === false`. Confirmation additionally requires the exact digest returned to the reviewer.
+Legacy anchored `pending:v1` and `confirmed:v1` OpenClaw headers are accepted for migration. The marker is a management convention, not a cryptographic signature or authentication boundary. Firefly's current stored rule is authoritative; old digests, proposal IDs, and expiry metadata are not checked.
 
-A module-level keyed mutex serializes these sequences per canonical non-zero rule ID within one Gateway process. Firefly-normalized responses are re-signed while inactive; descriptions are decoded from Firefly's one-layer HTML escaping before every PUT to avoid double escaping. Confirmation verifies the reviewed inactive rule by GET, then uses a minimal `{ active, description }` activation PUT and authoritative GET readback. Failed, timed-out, or semantically mismatched activation is followed by an ownership-checked attempt to deactivate without restoring a full snapshot, so concurrent semantic edits are not overwritten. If that cannot be verified, the tool returns `FIREFLY_ACTIVATION_UNCERTAIN` and the operator must inspect and deactivate the rule before continuing. This is defense in depth, not cross-process CAS: v6.7.2 has neither conditional PUT nor conditional DELETE. Rejection is disabled by default. Enabling `allowBestEffortPendingRuleDeletion` is supported only with **no external rule writers** (UI, another gateway, or another token), because its GET/check/DELETE race is unavoidable.
+Only managed rules can be changed by the managed-rule tools. Updates and deletion require the rule to be inactive. An active rule must be explicitly deactivated, with `confirmed: true`, before it can be edited or deleted. Activation, deactivation, deletion, and historical execution each require `confirmed: true`.
 
-## Historical execution
+`confirmed: true` is a model-supplied invocation value and cannot prove human approval. The agent must obtain explicit approval in its interaction workflow, separately for activation and for full-history execution. After any edit, preview and review the current rule again.
 
-Historical execution requires an active intact OpenClaw-confirmed rule and a fresh, unfiltered v6.7.2 preview receipt bound to the configured backend/credential identity. It is synchronous but may partially mutate before a 5xx; 5xx, malformed/absent responses, timeout, cancellation, and network failures are uncertain and must be inspected rather than retried. `confirmed: true` is an explicit tool parameter and records the requested confirmation step, but model-supplied input cannot prove human approval; the tool instruction and approved interaction workflow provide that policy boundary.
+Sequence same-rule and dependent operations. This avoids making a later action depend on an unverified earlier mutation. Independent operations on different rules need no blanket serialization.
 
 ## Action policy
 
-The exact allowed keywords are `set_category`, `set_budget`, `add_tag`, `remove_tag`, `set_description`, `set_notes`, `set_source_account`, `set_destination_account`, and `convert_transfer`. Unknown keywords fail closed.
+Allowed action keywords are `set_category`, `set_budget`, `add_tag`, `remove_tag`, `set_description`, `set_notes`, `set_source_account`, `set_destination_account`, and `convert_transfer`. Unknown actions fail closed.
 
-Before create, update, or confirmation, the plugin verifies exact existing names for categories, active budgets, tags, and active accounts. This prevents Firefly rule actions from creating near-duplicate metadata or silently targeting an unintended object. Duplicate singleton actions and contradictory add/remove operations for the same tag are rejected.
+Before create, update, and activation, named category, active-budget, tag, and active-account targets are validated. Duplicate singleton actions and conflicting tag add/remove actions are rejected. Amount/currency changes, deletion, arbitrary transaction-type conversion, webhooks, and other unreviewed actions remain unavailable.
 
-`convert_transfer` is the only transaction-type conversion exposed. Firefly has no generic `set_transaction_type` rule action. Withdrawal/deposit conversions remain denied because Firefly may create a missing expense or revenue account from their action value. Transfer conversion and account changes still require an inactive digest-bound proposal and explicit confirmation.
+## Mutation uncertainty
 
-All unknown or newly introduced Firefly actions remain denied by default.
+A successful create, update, activate, or deactivate is followed by a readback of the relevant stored outcome. A successful DELETE is reported from its response. Timeout, cancellation, connection loss, 5xx, malformed response, or failed readback can leave a mutation uncertain. The plugin reports that uncertainty instead of claiming no change, and callers must inspect Firefly before retrying. Historical execution must never be blindly replayed because it may have partially applied.
 
-## Secrets and logs
+## Secrets and transport
 
 - `accessToken` and `headers.*` are OpenClaw secret-input paths.
-- Request logs contain method, pathname, status, and duration only.
-- Query values, request/response bodies, bearer tokens, and custom-header values are not logged.
-- Error responses are drained but not echoed; reverse-proxy bodies may contain sensitive diagnostics.
-- Tool errors are normalized to safe code/status/message objects.
+- Logs contain method, pathname, status, and duration—not token, header, query, or body values.
+- Errors are normalized; reverse-proxy response bodies are not returned.
+- HTTPS is required by default. `allowInsecureHttp` is only for a trusted local/test deployment.
+- Redirects are rejected so credentials are not forwarded to another destination.
 
-## Transport
-
-HTTPS is required by default. `allowInsecureHttp` is an explicit operator setting for trusted local/test environments. Redirects are rejected so credentials are not forwarded to a different destination.
-
-## Reporting
-
-Do not include credentials, config dumps, raw reverse-proxy error bodies, or financial transaction payloads in a security report. Revoke any credential that may have been disclosed.
+Do not put credentials, config dumps, raw reverse-proxy bodies, or financial payloads in reports. Revoke any credential that may have been disclosed.

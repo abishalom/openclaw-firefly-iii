@@ -33,9 +33,10 @@ describe("Firefly config", () => {
     ).toThrow(/maxResponseBytes/u);
   });
 
-  it("keeps best-effort pending deletion disabled unless explicitly enabled", () => {
-    expect(normalizeConfig({ baseUrl: "https://firefly.test", accessToken: "token" }).allowBestEffortPendingRuleDeletion).toBe(false);
-    expect(normalizeConfig({ baseUrl: "https://firefly.test", accessToken: "token", allowBestEffortPendingRuleDeletion: true }).allowBestEffortPendingRuleDeletion).toBe(true);
+  it("rejects retired deletion opt-in configuration", () => {
+    expect(Value.Check(fireflyConfigSchema, {
+      baseUrl: "https://firefly.test", accessToken: "token", allowBestEffortPendingRuleDeletion: true,
+    })).toBe(false);
   });
 
   it("rejects unresolved secret-shaped runtime values without exposing them", () => {
