@@ -18,8 +18,12 @@ class Client {
   afterWrite?: () => void;
   writeError?: Error;
   readError?: Error;
+  accountType = "expense";
+  accountActive = true;
   async get(path: string, options?: unknown) {
     this.calls.push({ method: "GET", path, options });
+    if (path.startsWith("/categories/")) return { data: { id: path.split("/").at(-1), attributes: { name: "Food/Drink" } } };
+    if (path.startsWith("/accounts/")) return { data: { id: path.split("/").at(-1), attributes: { type: this.accountType, active: this.accountActive } } };
     if (this.calls.some((call) => call.method === "PUT") && this.readError) throw this.readError;
     return structuredClone(this.state);
   }
@@ -34,6 +38,33 @@ class Client {
 function setup() { const client = new Client(); return { client, service: new FireflyService(client as never) }; }
 
 describe("targeted transaction updates", () => {
+  it.each(["withdrawal", "deposit"])("sets category and %s counterparty without changing the bank side", async (type) => {
+    const { client, service } = setup();
+    client.state.data.attributes.transactions[0]!.type = type;
+    client.accountType = type === "withdrawal" ? "expense" : "revenue";
+    const original = structuredClone(client.state.data.attributes.transactions[0]!);
+    await expect(service.updateTransaction({ transactionId: "123", categoryId: "14", counterpartyAccountId: "425", addTags: ["review"] })).resolves.toMatchObject({ verified: true });
+    const changes = { category_id: "14", [type === "withdrawal" ? "destination_id" : "source_id"]: "425", tags: ["imported", "review"] };
+    expect(client.state.data.attributes.transactions[0]).toEqual({ ...original, ...changes });
+    expect(client.calls.find(c => c.method === "PUT")?.body).toEqual({ apply_rules: false, fire_webhooks: false, transactions: [{ transaction_journal_id: "789", ...changes }] });
+    await expect(service.updateTransaction({ transactionId: "123", categoryId: "14", counterpartyAccountId: "425" })).resolves.toMatchObject({ changed: false });
+    expect(client.calls.filter(c => c.method === "PUT")).toHaveLength(1);
+  });
+  it("supports category-only edits and verifies preservation failures", async () => {
+    const { client, service } = setup();
+    client.afterWrite = () => { client.state.data.attributes.transactions[0]!.category_id = "99"; };
+    await expect(service.updateTransaction({ transactionId: "123", categoryId: "14" })).rejects.toMatchObject({ code: "FIREFLY_MUTATION_UNCERTAIN" });
+    expect(client.calls.filter(c => c.method === "PUT")).toHaveLength(1);
+  });
+  it.each(["wrongType", "inactive", "transfer", "split"])("rejects unsafe counterparty edits: %s", async (kind) => {
+    const { client, service } = setup();
+    if (kind === "wrongType") client.accountType = "asset";
+    if (kind === "inactive") client.accountActive = false;
+    if (kind === "transfer") client.state.data.attributes.transactions[0]!.type = "transfer";
+    if (kind === "split") client.state.data.attributes.transactions.push(structuredClone(client.state.data.attributes.transactions[0]!));
+    await expect(service.updateTransaction({ transactionId: "123", counterpartyAccountId: "425" })).rejects.toBeInstanceOf(FireflyError);
+    expect(client.calls.some(c => c.method === "PUT")).toBe(false);
+  });
   it("converts only the selected group/journal and preserves amount, dates and metadata", async () => {
     const { client, service } = setup();
     const original = structuredClone(client.state.data.attributes.transactions[0]!);
@@ -71,6 +102,8 @@ describe("targeted transaction updates", () => {
   });
   it.each([
     {}, { transactionId: "" }, { transactionId: "001", addTags: ["x"] },
+    { transactionId: "123", categoryId: "01" }, { transactionId: "123", categoryId: null },
+    { transactionId: "123", counterpartyAccountId: "../1" }, { ...conversion, counterpartyAccountId: "425" },
     { transactionId: "123" }, { transactionId: "123", type: "withdrawal" },
     { transactionId: "123", type: "transfer" }, { transactionId: "123", sourceAccountId: "10" },
     { ...conversion, sourceAccountId: "20" }, { ...conversion, destinationAccountId: "../2" },

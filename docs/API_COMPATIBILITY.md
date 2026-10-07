@@ -58,3 +58,5 @@ The action allowlist is `set_category`, `set_budget`, `add_tag`, `remove_tag`, `
 ## Upgrade policy
 
 When upgrading Firefly, rerun lifecycle coverage and review rule schemas, trigger/action enums, response normalization, web rule-to-search translation, `/rules/{id}/trigger` semantics, and the all-account default. The plugin does not enforce a version allowlist; incompatibilities surface through ordinary API errors and response checks.
+
+Direct categorization: `categoryId` sets an existing category; `counterpartyAccountId` sets an active expense destination for withdrawals or active revenue source for deposits, preserving the bank/card side. Both are optional canonical numeric IDs, validated before PUT and verified on readback. Counterparty edits cannot accompany transfer conversion. Explicit categories replace existing categories; clearing is unsupported. Existing split, budget, tag-preservation, and uncertain-outcome safeguards remain.

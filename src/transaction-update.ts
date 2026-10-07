@@ -9,6 +9,8 @@ export interface TransactionUpdateInput {
   sourceAccountId?: string;
   destinationAccountId?: string;
   addTags?: string[];
+  categoryId?: string;
+  counterpartyAccountId?: string;
 }
 
 function reject(message: string): never {
@@ -40,11 +42,14 @@ function parse(value: unknown, expectedId: string) {
 
 /** Narrow PUT: never resubmit an entire GET response or omit another split. */
 export async function updateTransaction(client: FireflyClient, input: TransactionUpdateInput, signal?: AbortSignal) {
-  const allowed = new Set(["transactionId", "type", "sourceAccountId", "destinationAccountId", "addTags"]);
+  const allowed = new Set(["transactionId", "type", "sourceAccountId", "destinationAccountId", "addTags", "categoryId", "counterpartyAccountId"]);
   if (Object.keys(input).some((key) => !allowed.has(key))) reject("Unsupported transaction update argument.");
   id(input.transactionId);
+  if (input.categoryId !== undefined) id(input.categoryId);
+  if (input.counterpartyAccountId !== undefined) id(input.counterpartyAccountId);
   const conversion = input.type !== undefined || input.sourceAccountId !== undefined || input.destinationAccountId !== undefined;
   if (conversion) {
+    if (input.counterpartyAccountId !== undefined) reject("Counterparty edits cannot be combined with transfer conversion.");
     if (input.type !== "transfer") reject("Conversion requires type=transfer and both account IDs.");
     id(input.sourceAccountId);
     id(input.destinationAccountId);
@@ -54,7 +59,7 @@ export async function updateTransaction(client: FireflyClient, input: Transactio
     !Array.isArray(input.addTags) || input.addTags.length === 0 || input.addTags.length > 100 ||
     input.addTags.some((tag) => typeof tag !== "string" || tag.trim() === "" || tag.length > 1024)
   )) reject("addTags must contain 1–100 nonblank tags of at most 1024 characters.");
-  if (!conversion && input.addTags === undefined) reject("Supply a conversion or addTags.");
+  if (!conversion && input.addTags === undefined && input.categoryId === undefined && input.counterpartyAccountId === undefined) reject("Supply a conversion, categoryId, counterpartyAccountId, or addTags.");
   const path = `/transactions/${input.transactionId}`;
   const options = signal === undefined ? {} : { signal };
   const before = parse(await client.get<unknown>(path, options), input.transactionId);
@@ -63,6 +68,19 @@ export async function updateTransaction(client: FireflyClient, input: Transactio
   if ((conversion || before.split.type === "transfer") && before.split.budget_id != null) reject("Updating this transaction as a transfer would remove its budget; unsupported.");
   const tags = [...new Set([...before.tags, ...(input.addTags ?? []).map((tag) => tag.trim())])];
   const changes: Record<string, unknown> = {};
+  if (input.categoryId !== undefined) {
+    const category = await client.get<unknown>(`/categories/${input.categoryId}`, options);
+    if (!isRecord(category) || !isRecord(category.data) || category.data.id !== input.categoryId || !isRecord(category.data.attributes) || typeof category.data.attributes.name !== "string") invalidResponse("Invalid category response.");
+    changes.category_id = input.categoryId;
+  }
+  if (input.counterpartyAccountId !== undefined) {
+    if (!["withdrawal", "deposit"].includes(String(before.split.type))) reject("Counterparty edits require a withdrawal or deposit.");
+    const account = await client.get<unknown>(`/accounts/${input.counterpartyAccountId}`, options);
+    if (!isRecord(account) || !isRecord(account.data) || account.data.id !== input.counterpartyAccountId || !isRecord(account.data.attributes)) invalidResponse("Invalid account response.");
+    const expectedType = before.split.type === "withdrawal" ? "expense" : "revenue";
+    if (account.data.attributes.type !== expectedType || account.data.attributes.active !== true) reject(`Counterparty must be an active ${expectedType} account.`);
+    changes[before.split.type === "withdrawal" ? "destination_id" : "source_id"] = input.counterpartyAccountId;
+  }
   if (conversion) Object.assign(changes, { type: "transfer", source_id: input.sourceAccountId, destination_id: input.destinationAccountId });
   const changed = Object.entries(changes).some(([key, value]) => before.split[key] !== value) || !sameTags(before.tags, tags);
   if (!changed) return { changed: false, verified: true, transaction: before.group };

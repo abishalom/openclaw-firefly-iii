@@ -43,3 +43,5 @@ A successful create, update, activate, or deactivate is followed by a readback o
 - Redirects are rejected so credentials are not forwarded to another destination.
 
 Do not put credentials, config dumps, raw reverse-proxy bodies, or financial payloads in reports. Revoke any credential that may have been disclosed.
+
+Direct categorization: `categoryId` sets an existing category; `counterpartyAccountId` sets an active expense destination for withdrawals or active revenue source for deposits, preserving the bank/card side. Both are optional canonical numeric IDs, validated before PUT and verified on readback. Counterparty edits cannot accompany transfer conversion. Explicit categories replace existing categories; clearing is unsupported. Existing split, budget, tag-preservation, and uncertain-outcome safeguards remain.
