@@ -25,6 +25,12 @@ The documented native rule-test endpoint was not used because a verified v6.7.2 
 
 ## Managed rules and updates
 
+### Targeted transaction updates
+
+`firefly_transaction_update` uses `GET /v1/transactions/{id}`, a narrow `PUT` to the same group ID, then a verifying `GET`. Its payload contains `apply_rules: false`, `fire_webhooks: false`, and one `transactions` entry containing the existing `transaction_journal_id` plus the requested conversion fields and/or merged tags. Splits are rejected because omitted journals can be removed by a group update. No deletion endpoint is used. Transfer updates with an existing budget are rejected because v6.7.2 removes the budget regardless of omitted update fields.
+
+The update schema and v6.7.2 source were inspected; automated coverage uses stub clients and a local HTTP fixture, not a live Firefly write test. This does not establish production write permissions or verify all server-side effects. Uncertain writes and failed readbacks require inspection rather than automatic retry. The API supplies no atomic read/modify/write guarantee.
+
 Firefly has no dedicated rule metadata field, so the description's anchored first line is the management marker. The current marker is:
 
 ```text

@@ -8,6 +8,7 @@ describe("tool plugin metadata", () => {
     expect(metadata?.tools.map((tool) => tool.name)).toEqual([
       "firefly_transactions_list",
       "firefly_transaction_get",
+      "firefly_transaction_update",
       "firefly_transactions_search",
       "firefly_categories_list",
       "firefly_expense_account_create",

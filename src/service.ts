@@ -8,6 +8,7 @@ import {
   formatManagedDescription,
 } from "./rule-safety.js";
 import { compileRulePreview } from "./rule-preview.js";
+import { updateTransaction, type TransactionUpdateInput } from "./transaction-update.js";
 import { normalizeAccountCollection } from "./schemas/accounts.js";
 import {
   normalizeCreatedCategory,
@@ -100,6 +101,10 @@ export interface RuleStateResult {
 
 export class FireflyService {
   constructor(private readonly client: FireflyClient) {}
+
+  async updateTransaction(input: TransactionUpdateInput, signal?: AbortSignal) {
+    return updateTransaction(this.client, input, signal);
+  }
 
   async createExpenseAccount(input: { name: string; notes?: string }, signal?: AbortSignal) {
     validateCreationText(input.name, "name", 1024);

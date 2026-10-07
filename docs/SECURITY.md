@@ -2,7 +2,9 @@
 
 ## Exposed capability
 
-The plugin reads bounded Firefly data, creates minimal expense accounts/categories/tags, and manages only marked Firefly rules. It does not expose arbitrary URLs, paths, methods, request bodies, request headers, transaction mutation/deletion, generic rule mutation/deletion, or arbitrary rule triggering.
+The plugin reads bounded Firefly data, creates minimal expense accounts/categories/tags, updates individual single-entry transactions through a conversion/tagging allowlist, and manages only marked Firefly rules. It does not expose arbitrary URLs, paths, methods, request bodies, request headers, transaction deletion, generic rule mutation/deletion, or arbitrary rule triggering.
+
+`firefly_transaction_update` requires a canonical transaction group ID and at least one requested change. Conversion requires both distinct account IDs and `type: "transfer"`; tags are additive. Splits and budget-linked transfers/conversions are rejected. Rules and webhooks are disabled for the PUT. Readback verifies the requested changes and core preserved fields. There is no dry run or automatic retry. Read/update/readback is not atomic: concurrent edits may be overwritten, and an uncertain result requires inspection. There is no deletion, rollback, or automatic pair matching.
 
 Historical execution is exposed only through `firefly_rule_execute`. It requires an active managed rule and `confirmed: true`, and always targets all accounts and all dates. There is no backend version gate; API failures are reported normally.
 

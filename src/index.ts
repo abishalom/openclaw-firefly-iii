@@ -96,6 +96,23 @@ export default defineToolPlugin({
         safely(() => service(config, context.api.logger).getTransaction(id, context.signal)),
     }),
     tool({
+      name: "firefly_transaction_update",
+      label: "Update one Firefly transaction",
+      description: "Modify exactly one single-entry transaction group by ID: convert to a transfer using both account IDs and/or append tags, preserving existing tags. Writes immediately; no dry run. Rejects splits and transfers with budgets. Disables rules and webhooks, then reads back and verifies. Never deletes transactions. Inspect uncertain outcomes before retrying.",
+      parameters: Type.Object(
+        {
+          transactionId: Id,
+          type: Type.Optional(Type.Literal("transfer")),
+          sourceAccountId: Type.Optional(Id),
+          destinationAccountId: Type.Optional(Id),
+          addTags: Type.Optional(Type.Array(CreationName, { minItems: 1, maxItems: 100 })),
+        },
+        { additionalProperties: false },
+      ),
+      execute: (params, config, context) =>
+        safely(() => service(config, context.api.logger).updateTransaction(params, context.signal)),
+    }),
+    tool({
       name: "firefly_transactions_search",
       label: "Search Firefly transactions",
       description: "Search Firefly transactions using Firefly's native search query syntax.",

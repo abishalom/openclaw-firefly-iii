@@ -7,6 +7,8 @@
 
 `openclaw-firefly` is a narrow OpenClaw tool plugin for a self-hosted Firefly III instance. Firefly remains the source of truth for transactions and rule semantics. The plugin supplies constrained reads, selected metadata creation, managed rule lifecycle tools, and a search-based rule preview.
 
+The plugin also exposes `firefly_transaction_update` for a single transaction group ID, with optional transfer conversion (type and both account IDs required together) and/or additive tags. It rejects splits, disables rules/webhooks, and verifies a GET readback. It has no dry-run parameter. See the README for arguments, budget restrictions, and uncertain-outcome handling.
+
 The plugin does not include a categorizer skill, Telegram integration, scheduling, automatic cleanup, or a background migration job.
 
 ## Platform contract
