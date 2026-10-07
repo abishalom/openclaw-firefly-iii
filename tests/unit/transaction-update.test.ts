@@ -55,6 +55,20 @@ describe("targeted transaction updates", () => {
     await expect(service.updateTransaction({ ...conversion, addTags: ["review"] })).resolves.toMatchObject({ changed: false, verified: true });
     expect(client.calls.filter((call) => call.method === "PUT")).toHaveLength(1);
   });
+  it("accepts reordered tags on readback and skips already-present tags regardless of order", async () => {
+    const { client, service } = setup();
+    client.afterWrite = () => client.state.data.attributes.transactions[0]!.tags.reverse();
+    await expect(service.updateTransaction({ transactionId: "123", addTags: ["review"] })).resolves.toMatchObject({ verified: true });
+    await expect(service.updateTransaction({ transactionId: "123", addTags: ["imported", "review"] })).resolves.toMatchObject({ changed: false });
+    expect(client.calls.filter((call) => call.method === "PUT")).toHaveLength(1);
+  });
+  it("trims incoming tag names before merging, deduplicating and verifying", async () => {
+    const { client, service } = setup();
+    await expect(service.updateTransaction({ transactionId: "123", addTags: [" review ", "\treview\n", " imported "] })).resolves.toMatchObject({ changed: true, verified: true });
+    expect(client.calls[1]?.body.transactions[0].tags).toEqual(["imported", "review"]);
+    await expect(service.updateTransaction({ transactionId: "123", addTags: [" review "] })).resolves.toMatchObject({ changed: false, verified: true });
+    expect(client.calls.filter((call) => call.method === "PUT")).toHaveLength(1);
+  });
   it.each([
     {}, { transactionId: "" }, { transactionId: "001", addTags: ["x"] },
     { transactionId: "123" }, { transactionId: "123", type: "withdrawal" },

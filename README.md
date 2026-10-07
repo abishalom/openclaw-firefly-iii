@@ -14,7 +14,7 @@ A security-constrained OpenClaw plugin for reading Firefly III data, targeted tr
 {"transactionId":"456","addTags":["toDelete"]}
 ```
 
-Conversion requires `type: "transfer"` and both distinct account IDs together. `addTags` appends tags without removing existing tags. Both operations may be combined. At least one change is required. There is no `dryRun` argument: calls write immediately. Already-satisfied updates return `changed: false` without a PUT.
+Conversion requires `type: "transfer"` and both distinct account IDs together. `addTags` trims incoming tag names and appends them without removing existing tags; whitespace-only names are rejected before any request. Tag order does not affect verification. Both operations may be combined. At least one change is required. There is no `dryRun` argument: calls write immediately. Already-satisfied updates return `changed: false` without a PUT.
 
 The tool reads the transaction, rejects splits, sends only the journal ID and requested fields through `PUT /transactions/{id}`, with `apply_rules: false` and `fire_webhooks: false`, then reads it back. Successful results contain `changed`, `verified: true`, and the normalized transaction. Conversion supports withdrawals, deposits, and existing transfers. Budget-linked conversions (and budget-linked existing transfers) are rejected because Firefly removes budgets from transfers. Other metadata is omitted from the update; core accounting fields and associations are checked on readback.
 
