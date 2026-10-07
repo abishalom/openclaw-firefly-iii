@@ -98,12 +98,12 @@ export default defineToolPlugin({
     tool({
       name: "firefly_transaction_update",
       label: "Update one Firefly transaction",
-      description: "Modify exactly one single-entry transaction group by ID: set categoryId, set budgetId on withdrawals, set counterpartyAccountId (expense destination for withdrawals; revenue source for deposits), convert to a transfer using both account IDs, and/or append tags. Counterparty edits preserve the bank/card side and cannot accompany conversion. Existing categories may be overwritten when explicitly requested. Writes immediately; no dry run. Rejects splits and transfers with budgets. Disables rules and webhooks, then reads back and verifies. Never deletes transactions. Inspect uncertain outcomes before retrying.",
+      description: "Modify exactly one single-entry transaction group by ID: set categoryId, set budgetId on withdrawals (null clears, omitted preserves), set counterpartyAccountId (expense destination for withdrawals; revenue source for deposits), convert to a transfer using both account IDs, and/or append tags. Counterparty edits preserve the bank/card side and cannot accompany conversion. Existing categories may be overwritten when explicitly requested. Writes immediately; no dry run. Rejects splits and transfers with budgets. Disables rules and webhooks, then reads back and verifies. Never deletes transactions. Inspect uncertain outcomes before retrying.",
       parameters: Type.Object(
         {
           transactionId: Id,
           categoryId: Type.Optional(Id),
-          budgetId: Type.Optional(Id),
+          budgetId: Type.Optional(Type.Union([Id, Type.Null()], { description: "Budget ID to assign on a withdrawal; null clears its budget. Omit to preserve. Cannot accompany transfer conversion." })),
           counterpartyAccountId: Type.Optional(Id),
           type: Type.Optional(Type.Literal("transfer")),
           sourceAccountId: Type.Optional(Id),

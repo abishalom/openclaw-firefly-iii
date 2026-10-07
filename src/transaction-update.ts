@@ -10,7 +10,7 @@ export interface TransactionUpdateInput {
   destinationAccountId?: string;
   addTags?: string[];
   categoryId?: string;
-  budgetId?: string;
+  budgetId?: string | null;
   counterpartyAccountId?: string;
 }
 
@@ -47,7 +47,7 @@ export async function updateTransaction(client: FireflyClient, input: Transactio
   if (Object.keys(input).some((key) => !allowed.has(key))) reject("Unsupported transaction update argument.");
   id(input.transactionId);
   if (input.categoryId !== undefined) id(input.categoryId);
-  if (input.budgetId !== undefined) id(input.budgetId);
+  if (input.budgetId !== undefined && input.budgetId !== null) id(input.budgetId);
   if (input.counterpartyAccountId !== undefined) id(input.counterpartyAccountId);
   const conversion = input.type !== undefined || input.sourceAccountId !== undefined || input.destinationAccountId !== undefined;
   if (conversion) {
@@ -76,10 +76,12 @@ export async function updateTransaction(client: FireflyClient, input: Transactio
     changes.category_id = input.categoryId;
   }
   if (input.budgetId !== undefined) {
-    if (conversion || before.split.type !== "withdrawal") reject("Budget assignment requires a withdrawal and cannot accompany transfer conversion.");
-    const budget = await client.get<unknown>(`/budgets/${input.budgetId}`, options);
-    if (!isRecord(budget) || !isRecord(budget.data) || budget.data.id !== input.budgetId || !isRecord(budget.data.attributes) || typeof budget.data.attributes.name !== "string") invalidResponse("Invalid budget response.");
-    if (budget.data.attributes.active !== true) reject("Budget must be active.");
+    if (conversion || before.split.type !== "withdrawal") reject("Budget edits require a withdrawal and cannot accompany transfer conversion.");
+    if (input.budgetId !== null) {
+      const budget = await client.get<unknown>(`/budgets/${input.budgetId}`, options);
+      if (!isRecord(budget) || !isRecord(budget.data) || budget.data.id !== input.budgetId || !isRecord(budget.data.attributes) || typeof budget.data.attributes.name !== "string") invalidResponse("Invalid budget response.");
+      if (budget.data.attributes.active !== true) reject("Budget must be active.");
+    }
     changes.budget_id = input.budgetId;
   }
   if (input.counterpartyAccountId !== undefined) {
