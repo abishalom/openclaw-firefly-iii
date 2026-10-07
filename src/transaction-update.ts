@@ -10,6 +10,7 @@ export interface TransactionUpdateInput {
   destinationAccountId?: string;
   addTags?: string[];
   categoryId?: string;
+  budgetId?: string;
   counterpartyAccountId?: string;
 }
 
@@ -42,10 +43,11 @@ function parse(value: unknown, expectedId: string) {
 
 /** Narrow PUT: never resubmit an entire GET response or omit another split. */
 export async function updateTransaction(client: FireflyClient, input: TransactionUpdateInput, signal?: AbortSignal) {
-  const allowed = new Set(["transactionId", "type", "sourceAccountId", "destinationAccountId", "addTags", "categoryId", "counterpartyAccountId"]);
+  const allowed = new Set(["transactionId", "type", "sourceAccountId", "destinationAccountId", "addTags", "categoryId", "budgetId", "counterpartyAccountId"]);
   if (Object.keys(input).some((key) => !allowed.has(key))) reject("Unsupported transaction update argument.");
   id(input.transactionId);
   if (input.categoryId !== undefined) id(input.categoryId);
+  if (input.budgetId !== undefined) id(input.budgetId);
   if (input.counterpartyAccountId !== undefined) id(input.counterpartyAccountId);
   const conversion = input.type !== undefined || input.sourceAccountId !== undefined || input.destinationAccountId !== undefined;
   if (conversion) {
@@ -59,7 +61,7 @@ export async function updateTransaction(client: FireflyClient, input: Transactio
     !Array.isArray(input.addTags) || input.addTags.length === 0 || input.addTags.length > 100 ||
     input.addTags.some((tag) => typeof tag !== "string" || tag.trim() === "" || tag.length > 1024)
   )) reject("addTags must contain 1–100 nonblank tags of at most 1024 characters.");
-  if (!conversion && input.addTags === undefined && input.categoryId === undefined && input.counterpartyAccountId === undefined) reject("Supply a conversion, categoryId, counterpartyAccountId, or addTags.");
+  if (!conversion && input.addTags === undefined && input.categoryId === undefined && input.budgetId === undefined && input.counterpartyAccountId === undefined) reject("Supply a conversion, categoryId, budgetId, counterpartyAccountId, or addTags.");
   const path = `/transactions/${input.transactionId}`;
   const options = signal === undefined ? {} : { signal };
   const before = parse(await client.get<unknown>(path, options), input.transactionId);
@@ -72,6 +74,13 @@ export async function updateTransaction(client: FireflyClient, input: Transactio
     const category = await client.get<unknown>(`/categories/${input.categoryId}`, options);
     if (!isRecord(category) || !isRecord(category.data) || category.data.id !== input.categoryId || !isRecord(category.data.attributes) || typeof category.data.attributes.name !== "string") invalidResponse("Invalid category response.");
     changes.category_id = input.categoryId;
+  }
+  if (input.budgetId !== undefined) {
+    if (conversion || before.split.type !== "withdrawal") reject("Budget assignment requires a withdrawal and cannot accompany transfer conversion.");
+    const budget = await client.get<unknown>(`/budgets/${input.budgetId}`, options);
+    if (!isRecord(budget) || !isRecord(budget.data) || budget.data.id !== input.budgetId || !isRecord(budget.data.attributes) || typeof budget.data.attributes.name !== "string") invalidResponse("Invalid budget response.");
+    if (budget.data.attributes.active !== true) reject("Budget must be active.");
+    changes.budget_id = input.budgetId;
   }
   if (input.counterpartyAccountId !== undefined) {
     if (!["withdrawal", "deposit"].includes(String(before.split.type))) reject("Counterparty edits require a withdrawal or deposit.");

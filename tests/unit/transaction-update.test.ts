@@ -20,8 +20,10 @@ class Client {
   readError?: Error;
   accountType = "expense";
   accountActive = true;
+  budgetActive = true;
   async get(path: string, options?: unknown) {
     this.calls.push({ method: "GET", path, options });
+    if (path.startsWith("/budgets/")) return { data: { id: path.split("/").at(-1), attributes: { name: "Eating Out", active: this.budgetActive } } };
     if (path.startsWith("/categories/")) return { data: { id: path.split("/").at(-1), attributes: { name: "Food/Drink" } } };
     if (path.startsWith("/accounts/")) return { data: { id: path.split("/").at(-1), attributes: { type: this.accountType, active: this.accountActive } } };
     if (this.calls.some((call) => call.method === "PUT") && this.readError) throw this.readError;
@@ -38,6 +40,33 @@ class Client {
 function setup() { const client = new Client(); return { client, service: new FireflyService(client as never) }; }
 
 describe("targeted transaction updates", () => {
+  it("assigns an existing budget to one withdrawal and returns it without altering other fields", async () => {
+    const { client, service } = setup();
+    const original = structuredClone(client.state.data.attributes.transactions[0]!);
+    await expect(service.updateTransaction({ transactionId: "123", budgetId: "5" })).resolves.toMatchObject({
+      changed: true, verified: true, transaction: { transactions: [{ budgetId: "5" }] },
+    });
+    expect(client.state.data.attributes.transactions[0]).toEqual({ ...original, budget_id: "5" });
+    expect(client.calls.find(c => c.method === "PUT")?.body).toEqual({
+      apply_rules: false, fire_webhooks: false, transactions: [{ transaction_journal_id: "789", budget_id: "5" }],
+    });
+    await expect(service.updateTransaction({ transactionId: "123", budgetId: "5" })).resolves.toMatchObject({ changed: false });
+    expect(client.calls.filter(c => c.method === "PUT")).toHaveLength(1);
+  });
+  it.each(["deposit", "transfer", "conversion", "inactive", "split"])("rejects invalid budget assignments before writing: %s", async (kind) => {
+    const { client, service } = setup();
+    if (kind === "deposit" || kind === "transfer") client.state.data.attributes.transactions[0]!.type = kind;
+    if (kind === "inactive") client.budgetActive = false;
+    if (kind === "split") client.state.data.attributes.transactions.push(structuredClone(client.state.data.attributes.transactions[0]!));
+    await expect(service.updateTransaction({ ...(kind === "conversion" ? conversion : { transactionId: "123" }), budgetId: "5" })).rejects.toBeInstanceOf(FireflyError);
+    expect(client.calls.some(c => c.method === "PUT")).toBe(false);
+  });
+  it("reports an unpersisted budget as uncertain, without retrying", async () => {
+    const { client, service } = setup();
+    client.afterWrite = () => { client.state.data.attributes.transactions[0]!.budget_id = null; };
+    await expect(service.updateTransaction({ transactionId: "123", budgetId: "5" })).rejects.toMatchObject({ code: "FIREFLY_MUTATION_UNCERTAIN" });
+    expect(client.calls.filter(c => c.method === "PUT")).toHaveLength(1);
+  });
   it.each(["withdrawal", "deposit"])("sets category and %s counterparty without changing the bank side", async (type) => {
     const { client, service } = setup();
     client.state.data.attributes.transactions[0]!.type = type;
@@ -101,6 +130,7 @@ describe("targeted transaction updates", () => {
     expect(client.calls.filter((call) => call.method === "PUT")).toHaveLength(1);
   });
   it.each([
+    { transactionId: "123", budgetId: "01" }, { transactionId: "123", budgetId: null },
     {}, { transactionId: "" }, { transactionId: "001", addTags: ["x"] },
     { transactionId: "123", categoryId: "01" }, { transactionId: "123", categoryId: null },
     { transactionId: "123", counterpartyAccountId: "../1" }, { ...conversion, counterpartyAccountId: "425" },

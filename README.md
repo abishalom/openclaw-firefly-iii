@@ -131,3 +131,5 @@ Rules whose first description line is a recognized legacy `pending:v1` or `confi
 The plugin's API behavior is documented in [docs/API_COMPATIBILITY.md](docs/API_COMPATIBILITY.md).
 
 Account creation fixes the account type to expense or revenue, respectively. Rule account targets are resolved within compatible account types when a strict, positive transaction-type guard proves the context. Cross-type expense/revenue names are supported; ambiguous compatible targets remain rejected. OR rules and conversion chains retain conservative name validation.
+
+Single-transaction budget assignment uses {"transactionId":"123","budgetId":"5"}. The budget must exist and be active; only withdrawals are supported. This can accompany category/payee edits, but not transfer conversion. Omitted budgets are preserved; clearing is not exposed. Transaction reads include budgetId and budgetName.
