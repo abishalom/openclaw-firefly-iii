@@ -52,6 +52,8 @@ export interface NormalizedTransactionSplit {
   destinationName: string | null;
   categoryId: string | null;
   categoryName: string | null;
+  budgetId: string | null;
+  budgetName: string | null;
   notes: string | null;
   tags: string[];
 }
@@ -117,6 +119,8 @@ function normalizeSplit(value: unknown): NormalizedTransactionSplit {
     destinationName: asString(value.destination_name),
     categoryId: asString(value.category_id),
     categoryName: asString(value.category_name),
+    budgetId: asString(value.budget_id),
+    budgetName: asString(value.budget_name),
     notes: asString(value.notes),
     tags: Array.isArray(rawTags) ? rawTags.filter((tag): tag is string => typeof tag === "string") : [],
   };

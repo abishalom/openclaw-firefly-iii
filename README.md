@@ -14,7 +14,9 @@ A security-constrained OpenClaw plugin for reading Firefly III data, targeted tr
 {"transactionId":"456","addTags":["toDelete"]}
 ```
 
-Conversion requires `type: "transfer"` and both distinct account IDs together. `addTags` trims incoming tag names and appends them without removing existing tags; whitespace-only names are rejected before any request. Tag order does not affect verification. Both operations may be combined. At least one change is required. There is no `dryRun` argument: calls write immediately. Already-satisfied updates return `changed: false` without a PUT.
+Direct categorization uses `{"transactionId":"123","categoryId":"14","counterpartyAccountId":"425"}`. Both new fields are optional canonical IDs. Category IDs must exist; an explicitly supplied category replaces the current category. Counterparty IDs must identify an active expense account for a withdrawal or revenue account for a deposit; the bank/card side is preserved. Transfers and special types do not support counterparty edits. Category clearing is not exposed.
+
+Conversion requires `type: "transfer"` and both distinct account IDs together. `addTags` trims incoming tag names and appends them without removing existing tags; whitespace-only names are rejected before any request. Tag order does not affect verification. Category and tag edits may accompany either operation; counterparty edits cannot accompany transfer conversion. At least one change is required. There is no `dryRun` argument: calls write immediately. Already-satisfied updates return `changed: false` without a PUT.
 
 The tool reads the transaction, rejects splits, sends only the journal ID and requested fields through `PUT /transactions/{id}`, with `apply_rules: false` and `fire_webhooks: false`, then reads it back. Successful results contain `changed`, `verified: true`, and the normalized transaction. Conversion supports withdrawals, deposits, and existing transfers. Budget-linked conversions (and budget-linked existing transfers) are rejected because Firefly removes budgets from transfers. Other metadata is omitted from the update; core accounting fields and associations are checked on readback.
 
@@ -116,7 +118,7 @@ See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for fields and upgrade steps,
 
 Read-only: `firefly_transactions_list`, `firefly_transaction_get`, `firefly_transactions_search`, `firefly_categories_list`, `firefly_budgets_list`, `firefly_tags_list`, `firefly_accounts_list`, `firefly_rules_list`, `firefly_rule_get`, `firefly_rule_groups_list`, and `firefly_rule_test`.
 
-Direct constrained creation: `firefly_expense_account_create`, `firefly_category_create`, and `firefly_tag_create`.
+Direct constrained creation: `firefly_expense_account_create`, `firefly_revenue_account_create`, `firefly_category_create`, and `firefly_tag_create`.
 
 Managed-rule tools: `firefly_rule_create`, `firefly_rule_update`, `firefly_rule_activate`, `firefly_rule_deactivate`, `firefly_rule_delete`, and `firefly_rule_execute`.
 
@@ -127,3 +129,7 @@ Rules whose first description line is a recognized legacy `pending:v1` or `confi
 ## Compatibility
 
 The plugin's API behavior is documented in [docs/API_COMPATIBILITY.md](docs/API_COMPATIBILITY.md).
+
+Account creation fixes the account type to expense or revenue, respectively. Rule account targets are resolved within compatible account types when a strict, positive transaction-type guard proves the context. Cross-type expense/revenue names are supported; ambiguous compatible targets remain rejected. OR rules and conversion chains retain conservative name validation.
+
+Single-transaction budget assignment uses {"transactionId":"123","budgetId":"5"}. The budget must exist and be active; only withdrawals are supported. This can accompany category/payee edits, but not transfer conversion. To clear a withdrawal’s budget, use {"transactionId":"123","budgetId":null}. Omitted budgets are preserved. Clearing requires no budget lookup (including for inactive budgets), can accompany category/payee/tag edits, and cannot accompany transfer conversion. Transaction reads include budgetId and budgetName.

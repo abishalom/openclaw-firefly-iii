@@ -26,6 +26,29 @@ describe("direct metadata creation", () => {
     ]);
   });
 
+  it("creates revenue accounts with the fixed type and forwards cancellation", async () => {
+    const calls: unknown[] = [];
+    const client = { post: async (...args: unknown[]) => { calls.push(args); return single("accounts", "44", { name: "Intcomex", type: "revenue", active: true }); } };
+    const service = new FireflyService(client as never);
+    const signal = new AbortController().signal;
+    await expect(service.createRevenueAccount({ name: "Intcomex" }, signal)).resolves.toMatchObject({ id: "44", name: "Intcomex", type: "revenue" });
+    expect(calls).toEqual([["/accounts", { name: "Intcomex", type: "revenue" }, { signal }]]);
+  });
+
+  it("rejects wrong-type revenue creation responses as uncertain without retrying", async () => {
+    const client = new Client();
+    await expect(new FireflyService(client as never).createRevenueAccount({ name: "Vendor" })).rejects.toMatchObject({ code: "FIREFLY_MUTATION_UNCERTAIN" });
+    expect(client.calls).toHaveLength(1);
+  });
+
+  it("validates revenue account names and notes before writing", async () => {
+    const client = new Client(); const service = new FireflyService(client as never);
+    await expect(service.createRevenueAccount({ name: " " })).rejects.toBeInstanceOf(FireflyError);
+    await expect(service.createRevenueAccount({ name: "x".repeat(1025) })).rejects.toBeInstanceOf(FireflyError);
+    await expect(service.createRevenueAccount({ name: "Employer", notes: "x".repeat(32001) })).rejects.toBeInstanceOf(FireflyError);
+    expect(client.calls).toEqual([]);
+  });
+
   it("reports an ambiguous creation response as uncertain", async () => {
     const client = { post: async () => { throw new FireflyError("FIREFLY_TEMPORARY_FAILURE", "simulated"); } };
     const service = new FireflyService(client as never);

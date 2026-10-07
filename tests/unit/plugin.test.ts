@@ -12,6 +12,7 @@ describe("tool plugin metadata", () => {
       "firefly_transactions_search",
       "firefly_categories_list",
       "firefly_expense_account_create",
+      "firefly_revenue_account_create",
       "firefly_category_create",
       "firefly_budgets_list",
       "firefly_tags_list",

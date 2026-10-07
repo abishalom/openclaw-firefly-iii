@@ -119,3 +119,7 @@ The compatibility target and endpoint details are in [API_COMPATIBILITY.md](API_
 For upgrades, remove the retired `allowBestEffortPendingRuleDeletion` config key before starting this strict-schema version. Rebuild generated `dist/`, restart the Gateway, and first perform a read-only verification. Pulling source alone does not update a path-installed plugin.
 
 `plugin:validate` cannot run on Node 24.13.0 because OpenClaw hits a `node:sqlite` embedded-NUL issue. Use Node 24.16+ or 26.1+; this is a validation-environment limitation, not evidence that the plugin contract is invalid.
+
+Direct categorization: `categoryId` sets an existing category; `counterpartyAccountId` sets an active expense destination for withdrawals or active revenue source for deposits, preserving the bank/card side. Both are optional canonical numeric IDs, validated before PUT and verified on readback. Counterparty edits cannot accompany transfer conversion. Explicit categories replace existing categories; category clearing is unsupported. Existing split, budget, tag-preservation, and uncertain-outcome safeguards remain.
+
+Direct budget edits: `budgetId` assigns an existing active budget to a withdrawal; explicit `null` clears its budget without a budget lookup. Omitting it preserves the budget. The narrow PUT sends `budget_id: null` for clearing and verifies readback. Budget edits may accompany category/counterparty/tag edits, but not transfer conversion; splits and non-withdrawals are rejected.
