@@ -1,6 +1,28 @@
 # openclaw-firefly
 
-A security-constrained OpenClaw plugin for reading Firefly III data and managing marked Firefly rules.
+A security-constrained OpenClaw plugin for reading Firefly III data, targeted transaction updates, and managing marked Firefly rules.
+
+## Targeted transaction updates
+
+`firefly_transaction_update` writes to exactly one transaction **group ID** (the ID returned by `firefly_transaction_get`, not its journal ID):
+
+```json
+{"transactionId":"123","type":"transfer","sourceAccountId":"10","destinationAccountId":"20"}
+```
+
+```json
+{"transactionId":"456","addTags":["toDelete"]}
+```
+
+Conversion requires `type: "transfer"` and both distinct account IDs together. `addTags` trims incoming tag names and appends them without removing existing tags; whitespace-only names are rejected before any request. Tag order does not affect verification. Both operations may be combined. At least one change is required. There is no `dryRun` argument: calls write immediately. Already-satisfied updates return `changed: false` without a PUT.
+
+The tool reads the transaction, rejects splits, sends only the journal ID and requested fields through `PUT /transactions/{id}`, with `apply_rules: false` and `fire_webhooks: false`, then reads it back. Successful results contain `changed`, `verified: true`, and the normalized transaction. Conversion supports withdrawals, deposits, and existing transfers. Budget-linked conversions (and budget-linked existing transfers) are rejected because Firefly removes budgets from transfers. Other metadata is omitted from the update; core accounting fields and associations are checked on readback.
+
+No transaction deletion or automatic matching is exposed. A `toDelete` tag is only a review marker; it does not remove the duplicate's accounting effect. A matching workflow must verify the retained transfer before tagging its counterpart.
+
+Updates are not atomic with the initial read or verification. Avoid concurrent edits to the same transaction: Firefly provides no compare-and-swap here, so concurrent tag changes may be overwritten. A failed/uncertain write or readback is never automatically retried; inspect the transaction before continuing. This tool does not promise rollback or deduplication across imports.
+
+API contract: [TransactionUpdate](https://github.com/firefly-iii/api-docs/blob/main/src/v1/schemas/models/TransactionGroup/TransactionUpdate.yaml) and [TransactionSplitUpdate](https://github.com/firefly-iii/api-docs/blob/main/src/v1/schemas/models/TransactionSplit/TransactionSplitUpdate.yaml). Budget behaviour was source-reviewed against Firefly III v6.7.2.
 
 ## Managed-rule workflow
 
@@ -30,7 +52,7 @@ Sequence operations on one rule and dependent work (for example, deactivate → 
 - Only managed rules can be updated, activated, deactivated, deleted, or historically executed through these rule tools.
 - Deletion requires `confirmed: true` and an inactive rule. Activation, deactivation, and execution also require `confirmed: true`.
 - Rule triggers and actions are allowlisted. Referenced categories, active budgets, tags, and active accounts must already exist.
-- The plugin exposes no arbitrary URL/header/HTTP tool, transaction mutation or deletion, generic rule mutation, or arbitrary trigger endpoint.
+- Transaction writes are restricted to the targeted conversion/tagging tool above; transaction deletion is not exposed. The plugin exposes no arbitrary URL/header/HTTP tool, generic rule mutation, or arbitrary trigger endpoint.
 - Historical execution is always all-accounts/all-dates; there is no backend version gate. Preview is search-based and may be truncated or unable to provide an exact total.
 - A timeout, network failure, 5xx, cancellation, or failed mutation readback can leave the outcome uncertain. Inspect Firefly before retrying; do not assume no change occurred.
 
