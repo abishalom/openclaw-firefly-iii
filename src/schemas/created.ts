@@ -2,6 +2,7 @@ import { invalidResponse } from "../errors.js";
 import { asBoolean, asString, isRecord } from "./common.js";
 
 export interface CreatedExpenseAccount { id: string; name: string; type: "expense"; notes: string | null; active: boolean; }
+export interface CreatedRevenueAccount { id: string; name: string; type: "revenue"; notes: string | null; active: boolean; }
 export interface CreatedCategory { id: string; name: string; notes: string | null; }
 export interface CreatedTag { id: string; name: string; description: string | null; }
 
@@ -15,6 +16,13 @@ export function normalizeCreatedExpenseAccount(value: unknown): CreatedExpenseAc
   const name = asString(attributes.name);
   if (name === null || attributes.type !== "expense") invalidResponse();
   return { id, name, type: "expense", notes: asString(attributes.notes), active: asBoolean(attributes.active) ?? true };
+}
+
+export function normalizeCreatedRevenueAccount(value: unknown): CreatedRevenueAccount {
+  const { id, attributes } = resource(value);
+  const name = asString(attributes.name);
+  if (name === null || attributes.type !== "revenue") invalidResponse();
+  return { id, name, type: "revenue", notes: asString(attributes.notes), active: asBoolean(attributes.active) ?? true };
 }
 
 export function normalizeCreatedCategory(value: unknown): CreatedCategory {

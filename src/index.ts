@@ -146,6 +146,13 @@ export default defineToolPlugin({
       execute: (params, config, context) => safely(() => service(config, context.api.logger).createExpenseAccount(params, context.signal)),
     }),
     tool({
+      name: "firefly_revenue_account_create",
+      label: "Create Firefly revenue account",
+      description: "Create an revenue account with a name and optional notes. The account type is always revenue.",
+      parameters: Type.Object({ name: CreationName, notes: Notes }, { additionalProperties: false }),
+      execute: (params, config, context) => safely(() => service(config, context.api.logger).createRevenueAccount(params, context.signal)),
+    }),
+    tool({
       name: "firefly_category_create",
       label: "Create Firefly category",
       description: "Create a Firefly category with a name and optional notes.",

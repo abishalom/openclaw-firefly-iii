@@ -116,7 +116,7 @@ See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for fields and upgrade steps,
 
 Read-only: `firefly_transactions_list`, `firefly_transaction_get`, `firefly_transactions_search`, `firefly_categories_list`, `firefly_budgets_list`, `firefly_tags_list`, `firefly_accounts_list`, `firefly_rules_list`, `firefly_rule_get`, `firefly_rule_groups_list`, and `firefly_rule_test`.
 
-Direct constrained creation: `firefly_expense_account_create`, `firefly_category_create`, and `firefly_tag_create`.
+Direct constrained creation: `firefly_expense_account_create`, `firefly_revenue_account_create`, `firefly_category_create`, and `firefly_tag_create`.
 
 Managed-rule tools: `firefly_rule_create`, `firefly_rule_update`, `firefly_rule_activate`, `firefly_rule_deactivate`, `firefly_rule_delete`, and `firefly_rule_execute`.
 
@@ -127,3 +127,5 @@ Rules whose first description line is a recognized legacy `pending:v1` or `confi
 ## Compatibility
 
 The plugin's API behavior is documented in [docs/API_COMPATIBILITY.md](docs/API_COMPATIBILITY.md).
+
+Account creation fixes the account type to expense or revenue, respectively. Rule account targets are resolved within compatible account types when a strict, positive transaction-type guard proves the context. Cross-type expense/revenue names are supported; ambiguous compatible targets remain rejected. OR rules and conversion chains retain conservative name validation.

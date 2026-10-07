@@ -13,6 +13,7 @@ import { normalizeAccountCollection } from "./schemas/accounts.js";
 import {
   normalizeCreatedCategory,
   normalizeCreatedExpenseAccount,
+  normalizeCreatedRevenueAccount,
   normalizeCreatedTag,
 } from "./schemas/created.js";
 import { normalizeBudgetCollection, normalizeTagCollection } from "./schemas/metadata.js";
@@ -117,6 +118,20 @@ export class FireflyService {
           withSignal(signal),
         )
         .then(normalizeCreatedExpenseAccount),
+    );
+  }
+
+  async createRevenueAccount(input: { name: string; notes?: string }, signal?: AbortSignal) {
+    validateCreationText(input.name, "name", 1024);
+    if (input.notes !== undefined) validateOptionalText(input.notes, "notes", 32_000);
+    return this.createWithUncertainOutcome(() =>
+      this.client
+        .post<unknown>(
+          "/accounts",
+          { name: input.name, type: "revenue", ...(input.notes === undefined ? {} : { notes: input.notes }) },
+          withSignal(signal),
+        )
+        .then(normalizeCreatedRevenueAccount),
     );
   }
 
@@ -303,7 +318,7 @@ export class FireflyService {
     const groupId = resourceId(input.ruleGroupId);
     assertAllowedTriggers(input.triggers);
     assertAllowedActions(input.actions);
-    await this.assertActionTargetsExist(input.actions, signal);
+    await this.assertActionTargetsExist(input.actions, input.triggers, input.strict ?? true, signal);
 
     const payload = {
       title: input.title,
@@ -347,7 +362,7 @@ export class FireflyService {
 
     const actions = input.actions ?? existing.actions;
     assertAllowedActions(actions);
-    await this.assertActionTargetsExist(actions, signal);
+    await this.assertActionTargetsExist(actions, input.triggers ?? existing.triggers, input.strict ?? existing.strict, signal);
 
     const payload: Record<string, unknown> = {
       description: formatManagedDescription(userDescription),
@@ -412,7 +427,7 @@ export class FireflyService {
     }
     assertAllowedTriggers(rule.triggers);
     assertAllowedActions(rule.actions);
-    await this.assertActionTargetsExist(rule.actions, signal);
+    await this.assertActionTargetsExist(rule.actions, rule.triggers, rule.strict, signal);
     try {
       const response = await this.client.post<unknown>(`/rules/${id}/trigger`, { accounts: [] }, withSignal(signal));
       if (response !== undefined) {
@@ -434,7 +449,7 @@ export class FireflyService {
     if (active) {
       assertAllowedTriggers(existing.triggers);
       assertAllowedActions(existing.actions);
-      await this.assertActionTargetsExist(existing.actions, signal);
+      await this.assertActionTargetsExist(existing.actions, existing.triggers, existing.strict, signal);
     }
     try {
       await this.client.put<unknown>(
@@ -506,7 +521,7 @@ export class FireflyService {
     return { transactions, total, truncated };
   }
 
-  private async assertActionTargetsExist(actions: readonly { type: string; value: string | null }[], signal?: AbortSignal): Promise<void> {
+  private async assertActionTargetsExist(actions: readonly { type: string; value: string | null; active?: boolean }[], triggers: readonly { type: string; value: string | null; active?: boolean; prohibited?: boolean; stopProcessing?: boolean }[], strict: boolean, signal?: AbortSignal): Promise<void> {
     const categories = actions.filter((action) => action.type === "set_category").map((action) => action.value).filter((value): value is string => value !== null);
     if (categories.length > 0) {
       const names = new Set((await this.listCategories({ page: 1, limit: 65_536 }, signal)).categories.map((category) => category.name));
@@ -528,16 +543,29 @@ export class FireflyService {
       if (missing !== undefined) throw new FireflyError("FIREFLY_RULE_UNSAFE", `Tag ${JSON.stringify(missing)} does not exist in Firefly.`);
     }
 
-    const accountNames = actions.filter((action) => action.type === "set_source_account" || action.type === "set_destination_account" || action.type === "convert_transfer").map((action) => action.value).filter((value): value is string => value !== null);
-    if (accountNames.length > 0) {
-      const accounts = (await this.listAccounts({ page: 1, limit: 65_536 }, signal)).accounts.filter((account) => account.active);
-      for (const name of accountNames) {
-        const matches = accounts.filter((account) => account.name === name);
+    const accountActions = actions.filter((action) => action.active !== false && ["set_source_account", "set_destination_account", "convert_transfer"].includes(action.type));
+    if (accountActions.length > 0) {
+      const accounts = [];
+      for (let page = 1; ; page++) {
+        const result = await this.listAccounts({ page, limit: 100 }, signal);
+        accounts.push(...result.accounts.filter((account) => account.active));
+        if (result.pagination.totalPages !== null ? result.pagination.currentPage >= result.pagination.totalPages : result.accounts.length < 100) break;
+        if (page >= 1000 || result.accounts.length === 0) throw new FireflyError("FIREFLY_RULE_UNSAFE", "Could not completely inspect account targets.");
+      }
+      const typeGuards = triggers.filter((trigger) => trigger.active !== false && !trigger.prohibited && trigger.type === "transaction_type");
+      // OR rules, conflicting guards, and conversion chains cannot safely narrow the account namespace.
+      const types = new Set(typeGuards.map((trigger) => trigger.value?.toLowerCase()));
+      const transactionType = strict && types.size === 1 && !triggers.some((trigger) => trigger.active !== false && trigger.stopProcessing) && !actions.some((action) => action.active !== false && action.type === "convert_transfer")
+        ? [...types][0] : undefined;
+      for (const action of accountActions) {
+        const name = action.value;
+        const allowedTypes = accountTargetTypes(action.type, transactionType);
+        const matches = accounts.filter((account) => account.name === name && (allowedTypes === null || (account.type !== null && allowedTypes.includes(account.type))));
         if (matches.length === 0) {
-          throw new FireflyError("FIREFLY_RULE_UNSAFE", `Active account ${JSON.stringify(name)} does not exist in Firefly.`);
+          throw new FireflyError("FIREFLY_RULE_UNSAFE", `Active compatible account ${JSON.stringify(name)} does not exist in Firefly.`);
         }
         if (matches.length > 1) {
-          throw new FireflyError("FIREFLY_RULE_UNSAFE", `Account name ${JSON.stringify(name)} is ambiguous in Firefly.`);
+          throw new FireflyError("FIREFLY_RULE_UNSAFE", `Account name ${JSON.stringify(name)} is ambiguous in Firefly for this rule.`);
         }
       }
     }
@@ -677,4 +705,14 @@ function mutationUncertain(message: string, error: unknown): FireflyError {
   return error instanceof FireflyError
     ? error
     : new FireflyError("FIREFLY_MUTATION_UNCERTAIN", message, undefined, { cause: error });
+}
+
+// Firefly III expected_source_types; API liability types are normalized to "liabilities".
+function accountTargetTypes(action: string, transactionType: string | undefined): string[] | null {
+  const assets = ["asset", "liabilities", "loan", "debt", "mortgage"];
+  const payees = ["liabilities", "loan", "debt", "mortgage", "cash"];
+  if (action === "set_destination_account" && transactionType === "withdrawal") return ["expense", ...payees];
+  if (action === "set_source_account" && transactionType === "deposit") return ["revenue", ...payees];
+  if (["set_source_account", "set_destination_account"].includes(action) && ["withdrawal", "deposit", "transfer"].includes(transactionType ?? "")) return assets;
+  return null;
 }
